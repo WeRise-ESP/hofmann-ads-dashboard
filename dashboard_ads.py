@@ -20,25 +20,10 @@ st.set_page_config(
     layout="wide",
 )
 
-# ─── CSS — contraste sidebar ──────────────────────────────────────────────────
+# ─── CSS — sidebar y login ────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Texto general del sidebar */
-[data-testid="stSidebar"] * {
-    color: #f0f2f6 !important;
-}
-
-/* Fondo de los inputs / selects */
-[data-testid="stSidebar"] input,
-[data-testid="stSidebar"] textarea,
-[data-testid="stSidebar"] [data-baseweb="select"] > div,
-[data-testid="stSidebar"] [data-baseweb="input"] > div {
-    background-color: rgba(255,255,255,0.12) !important;
-    border-color: rgba(255,255,255,0.3) !important;
-    color: #f0f2f6 !important;
-}
-
-/* Chips del multiselect (tags seleccionados) */
+/* Chips del multiselect */
 [data-testid="stSidebar"] [data-baseweb="tag"] {
     background-color: #1877F2 !important;
     color: #ffffff !important;
@@ -46,64 +31,35 @@ st.markdown("""
 [data-testid="stSidebar"] [data-baseweb="tag"] span {
     color: #ffffff !important;
 }
-
-/* Icono X del chip */
 [data-testid="stSidebar"] [data-baseweb="tag"] svg {
     fill: #ffffff !important;
 }
 
-/* Radio buttons — label */
-[data-testid="stSidebar"] .stRadio label,
-[data-testid="stSidebar"] .stRadio div {
-    color: #f0f2f6 !important;
-}
-
-/* Botón de actualizar */
-[data-testid="stSidebar"] button {
-    background-color: #1a56db !important;
+/* Botón actualizar */
+[data-testid="stSidebar"] button[kind="secondary"],
+[data-testid="stSidebar"] .stButton > button {
+    background-color: #1877F2 !important;
     color: #ffffff !important;
     border: none !important;
-}
-
-/* Texto del caption / fecha */
-[data-testid="stSidebar"] .stCaption,
-[data-testid="stSidebar"] small {
-    color: #b0b8c8 !important;
-}
-
-/* Placeholder de los selectbox */
-[data-testid="stSidebar"] [data-baseweb="select"] [data-testid="stMarkdownContainer"] p {
-    color: #f0f2f6 !important;
-}
-
-/* Divider */
-[data-testid="stSidebar"] hr {
-    border-color: rgba(255,255,255,0.2) !important;
+    font-weight: 600 !important;
 }
 
 /* ── Login — campo contraseña ── */
-input[type="password"],
-[data-baseweb="input"] input[type="password"] {
+input[type="password"] {
     background-color: #ffffff !important;
     color: #1a1a2e !important;
     border: 2px solid #d0d5dd !important;
     border-radius: 8px !important;
 }
-
-/* Contenedor del input de contraseña */
 [data-baseweb="input"] {
     background-color: #ffffff !important;
     border: 2px solid #d0d5dd !important;
     border-radius: 8px !important;
 }
-
-/* Placeholder visible */
 input[type="password"]::placeholder {
     color: #9aa5b4 !important;
     opacity: 1 !important;
 }
-
-/* Icono del ojo (mostrar/ocultar contraseña) */
 [data-baseweb="input"] button svg {
     fill: #555 !important;
 }

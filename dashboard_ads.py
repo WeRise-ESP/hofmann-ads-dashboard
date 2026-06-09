@@ -126,6 +126,10 @@ LINKEDIN_ACCOUNT_ID = _s("LINKEDIN_AD_ACCOUNT_ID")
 TIKTOK_TOKEN        = _s("TIKTOK_ACCESS_TOKEN")
 TIKTOK_ADVERTISER_ID = _s("TIKTOK_ADVERTISER_ID")
 
+# LinkedIn Ads — fuente alternativa vía Google Sheets (CSV manual desde Campaign Manager)
+# Formato del sheet: fecha | campaña | gasto | conversiones | clics | impresiones
+LINKEDIN_SHEET_URL  = _s("LINKEDIN_SHEET_URL")
+
 # ─── Configuración de plataformas ─────────────────────────────────────────────
 COLORS = {
     "Google Ads":   "#FF6D00",
@@ -143,7 +147,9 @@ PLATFORM_ICONS = {
 
 # Plataformas activas según credenciales disponibles
 AVAILABLE_PLATFORMS = ["Google Ads", "Meta Ads"]
-if LINKEDIN_TOKEN and LINKEDIN_ACCOUNT_ID:
+linkedin_via_api    = bool(LINKEDIN_TOKEN and LINKEDIN_ACCOUNT_ID)
+linkedin_via_sheets = bool(LINKEDIN_SHEET_URL)
+if linkedin_via_api or linkedin_via_sheets:
     AVAILABLE_PLATFORMS.append("LinkedIn Ads")
 if TIKTOK_TOKEN and TIKTOK_ADVERTISER_ID:
     AVAILABLE_PLATFORMS.append("TikTok Ads")
@@ -434,6 +440,82 @@ def get_tiktok_ads_data(start: str, end: str) -> pd.DataFrame:
         st.error(f"Error TikTok Ads: {e}")
         return pd.DataFrame()
 
+# ─── Conector LinkedIn Ads vía Google Sheets (CSV manual) ────────────────────
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_linkedin_sheets_data(start: str, end: str) -> pd.DataFrame:
+    """
+    Lee un Google Sheet publicado como CSV con los datos exportados manualmente
+    desde LinkedIn Campaign Manager.
+
+    Columnas esperadas (nombres en español o inglés, mayúsculas/minúsculas indistinto):
+      fecha | campaña | gasto | conversiones | clics | impresiones
+      date  | campaign| spend | conversions  | clicks| impressions
+
+    La columna 'mercado' es opcional — si no existe se infiere del nombre de campaña.
+    Requiere en secrets: LINKEDIN_SHEET_URL (URL de publicación CSV del sheet)
+    """
+    if not LINKEDIN_SHEET_URL:
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(LINKEDIN_SHEET_URL)
+
+        # Normalizar nombres de columnas
+        df.columns = [c.strip().lower() for c in df.columns]
+        col_map = {
+            "fecha": "fecha",        "date": "fecha",
+            "campaña": "campaña",    "campana": "campaña",
+            "campaign": "campaña",   "campaign name": "campaña",
+            "nombre campaña": "campaña",
+            "gasto": "gasto",        "spend": "gasto",
+            "inversión": "gasto",    "inversion": "gasto",   "cost": "gasto",
+            "conversiones": "conversiones", "conversions": "conversiones",
+            "clics": "clics",        "clicks": "clics",
+            "impresiones": "impresiones",   "impressions": "impresiones",
+            "mercado": "mercado",
+        }
+        df = df.rename(columns={c: col_map.get(c, c) for c in df.columns})
+
+        # Verificar columnas mínimas
+        for col in ["fecha", "campaña", "gasto"]:
+            if col not in df.columns:
+                st.error(f"LinkedIn Sheets: falta la columna '{col}'. "
+                         "Revisa el formato del Google Sheet.")
+                return pd.DataFrame()
+
+        # Rellenar columnas opcionales
+        for col, default in [("conversiones", 0), ("clics", 0), ("impresiones", 0)]:
+            if col not in df.columns:
+                df[col] = default
+
+        # Parsear tipos
+        df["fecha"] = pd.to_datetime(df["fecha"], dayfirst=True, errors="coerce")
+        df = df.dropna(subset=["fecha"])
+        df["gasto"]        = pd.to_numeric(df["gasto"],        errors="coerce").fillna(0)
+        df["conversiones"] = pd.to_numeric(df["conversiones"], errors="coerce").fillna(0)
+        df["clics"]        = pd.to_numeric(df["clics"],        errors="coerce").fillna(0).astype(int)
+        df["impresiones"]  = pd.to_numeric(df["impresiones"],  errors="coerce").fillna(0).astype(int)
+
+        # Filtrar por rango de fechas seleccionado
+        start_dt = pd.to_datetime(start)
+        end_dt   = pd.to_datetime(end)
+        df = df[(df["fecha"] >= start_dt) & (df["fecha"] <= end_dt)].copy()
+
+        if df.empty:
+            return pd.DataFrame()
+
+        df["plataforma"] = "LinkedIn Ads"
+
+        # Mercado: usar columna si existe, si no inferir del nombre de campaña
+        if "mercado" not in df.columns:
+            df["mercado"] = df["campaña"].apply(lambda x: parse_mercado(str(x), "linkedin"))
+
+        return df[["fecha", "campaña", "gasto", "conversiones", "clics", "impresiones",
+                   "plataforma", "mercado"]]
+
+    except Exception as e:
+        st.error(f"Error LinkedIn Sheets: {e}")
+        return pd.DataFrame()
+
 # ─── Sidebar — filtros ────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Filtros")
@@ -486,17 +568,28 @@ st.title("📊 Hofmann · Inversión Publicitaria")
 # Caption dinámico con plataformas activas
 active_source_labels = []
 with st.spinner("Cargando datos..."):
-    df_google   = get_google_ads_data(str(start_d), str(end_d))
-    df_meta     = get_meta_ads_data(str(start_d), str(end_d))
-    df_linkedin = get_linkedin_ads_data(str(start_d), str(end_d))
-    df_tiktok   = get_tiktok_ads_data(str(start_d), str(end_d))
+    df_google = get_google_ads_data(str(start_d), str(end_d))
+    df_meta   = get_meta_ads_data(str(start_d), str(end_d))
 
-for plat, df_plat in [
-    ("Google Ads", df_google), ("Meta Ads", df_meta),
-    ("LinkedIn Ads", df_linkedin), ("TikTok Ads", df_tiktok)
-]:
-    if not df_plat.empty:
-        active_source_labels.append(plat)
+    # LinkedIn: API tiene prioridad; si no hay API, usar Google Sheets
+    if linkedin_via_api:
+        df_linkedin = get_linkedin_ads_data(str(start_d), str(end_d))
+    elif linkedin_via_sheets:
+        df_linkedin = get_linkedin_sheets_data(str(start_d), str(end_d))
+    else:
+        df_linkedin = pd.DataFrame()
+
+    df_tiktok = get_tiktok_ads_data(str(start_d), str(end_d))
+
+if not df_google.empty:
+    active_source_labels.append("Google Ads")
+if not df_meta.empty:
+    active_source_labels.append("Meta Ads")
+if not df_linkedin.empty:
+    label = "LinkedIn Ads (API)" if linkedin_via_api else "LinkedIn Ads (Sheets)"
+    active_source_labels.append(label)
+if not df_tiktok.empty:
+    active_source_labels.append("TikTok Ads")
 
 st.caption(" + ".join(active_source_labels) + " · Caché actualizado cada hora")
 

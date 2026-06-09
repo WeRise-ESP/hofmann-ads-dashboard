@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import requests
 import json
 import os
+from io import StringIO
 from datetime import date, timedelta
 from dotenv import load_dotenv
 
@@ -457,7 +458,11 @@ def get_linkedin_sheets_data(start: str, end: str) -> pd.DataFrame:
     if not LINKEDIN_SHEET_URL:
         return pd.DataFrame()
     try:
-        df = pd.read_csv(LINKEDIN_SHEET_URL)
+        r = requests.get(LINKEDIN_SHEET_URL, timeout=20)
+        r.raise_for_status()
+        r.encoding = "utf-8"                          # forzar UTF-8 (ñ, acentos)
+        content = r.content.decode("utf-8-sig")       # utf-8-sig elimina BOM si existe
+        df = pd.read_csv(StringIO(content))
 
         # Normalizar nombres de columnas
         df.columns = [c.strip().lower() for c in df.columns]
@@ -488,12 +493,28 @@ def get_linkedin_sheets_data(start: str, end: str) -> pd.DataFrame:
                 df[col] = default
 
         # Parsear tipos
-        df["fecha"] = pd.to_datetime(df["fecha"], dayfirst=True, errors="coerce")
+        # Función que acepta tanto "26,71" (europeo) como "26.71" (anglosajón)
+        def to_num(series):
+            return (
+                series.astype(str)
+                      .str.strip()
+                      .str.replace(",", ".", regex=False)
+                      .pipe(pd.to_numeric, errors="coerce")
+                      .fillna(0)
+            )
+
+        # Intentar formato ISO (YYYY-MM-DD) primero; si falla, probar formato europeo (DD/MM/YYYY)
+        df["fecha"] = pd.to_datetime(df["fecha"], format="%Y-%m-%d", errors="coerce")
+        mask_failed = df["fecha"].isna()
+        if mask_failed.any():
+            df.loc[mask_failed, "fecha"] = pd.to_datetime(
+                df.loc[mask_failed, "fecha"], dayfirst=True, errors="coerce"
+            )
         df = df.dropna(subset=["fecha"])
-        df["gasto"]        = pd.to_numeric(df["gasto"],        errors="coerce").fillna(0)
-        df["conversiones"] = pd.to_numeric(df["conversiones"], errors="coerce").fillna(0)
-        df["clics"]        = pd.to_numeric(df["clics"],        errors="coerce").fillna(0).astype(int)
-        df["impresiones"]  = pd.to_numeric(df["impresiones"],  errors="coerce").fillna(0).astype(int)
+        df["gasto"]        = to_num(df["gasto"])
+        df["conversiones"] = to_num(df["conversiones"])
+        df["clics"]        = to_num(df["clics"]).astype(int)
+        df["impresiones"]  = to_num(df["impresiones"]).astype(int)
 
         # Filtrar por rango de fechas seleccionado
         start_dt = pd.to_datetime(start)

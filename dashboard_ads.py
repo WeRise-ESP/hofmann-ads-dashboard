@@ -167,7 +167,7 @@ def parse_mercado(name: str, platform: str) -> str:
     # Google, LinkedIn, TikTok: buscar tokens en el nombre de campaña
     if any(t in n for t in ["LATAM", "- LAT", "_LAT", "LAT_"]):
         return "Latam"
-    if any(t in n for t in ["- ES", "- NAC", "- BCN", "- CAT", "_ES", "_NAC", "_BCN", "_CAT", "- NACI"]):
+    if any(t in n for t in ["- ES", "- NAC", "- BCN", "- CAT", "_ES", "_NAC", "_BCN", "_CAT", "- NACI", "NAC_"]):
         return "Nacional"
     return "Otro"
 

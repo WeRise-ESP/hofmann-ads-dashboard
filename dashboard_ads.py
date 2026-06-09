@@ -1,6 +1,6 @@
 """
 Dashboard de Inversión Publicitaria — Hofmann
-Fuentes: Google Ads + Meta Ads
+Fuentes: Google Ads + Meta Ads + LinkedIn Ads + TikTok Ads
 """
 import streamlit as st
 import pandas as pd
@@ -106,6 +106,7 @@ def _s(key, default=""):
     except Exception:
         return os.getenv(key, default)
 
+# Google Ads
 GA_DEVELOPER_TOKEN = _s("GOOGLE_ADS_DEVELOPER_TOKEN")
 GA_CLIENT_ID       = _s("GOOGLE_ADS_CLIENT_ID")
 GA_CLIENT_SECRET   = _s("GOOGLE_ADS_CLIENT_SECRET")
@@ -113,10 +114,39 @@ GA_REFRESH_TOKEN   = _s("GOOGLE_ADS_REFRESH_TOKEN")
 GA_LOGIN_CID       = _s("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "4885772142")
 GA_CUSTOMER_ID     = _s("GOOGLE_ADS_CUSTOMER_ID", "9010916591")
 
+# Meta Ads
 META_TOKEN      = _s("META_ACCESS_TOKEN")
 META_ACCOUNT_ID = _s("META_AD_ACCOUNT_ID", "2649358358505616")
 
-COLORS = {"Google Ads": "#FF6D00", "Meta Ads": "#1877F2"}
+# LinkedIn Ads (opcional — se activa cuando haya credenciales)
+LINKEDIN_TOKEN      = _s("LINKEDIN_ACCESS_TOKEN")
+LINKEDIN_ACCOUNT_ID = _s("LINKEDIN_AD_ACCOUNT_ID")
+
+# TikTok Ads (opcional — se activa cuando haya credenciales)
+TIKTOK_TOKEN        = _s("TIKTOK_ACCESS_TOKEN")
+TIKTOK_ADVERTISER_ID = _s("TIKTOK_ADVERTISER_ID")
+
+# ─── Configuración de plataformas ─────────────────────────────────────────────
+COLORS = {
+    "Google Ads":   "#FF6D00",
+    "Meta Ads":     "#1877F2",
+    "LinkedIn Ads": "#0A66C2",
+    "TikTok Ads":   "#FF0050",
+}
+
+PLATFORM_ICONS = {
+    "Google Ads":   "🟠",
+    "Meta Ads":     "🔵",
+    "LinkedIn Ads": "🔷",
+    "TikTok Ads":   "🩷",
+}
+
+# Plataformas activas según credenciales disponibles
+AVAILABLE_PLATFORMS = ["Google Ads", "Meta Ads"]
+if LINKEDIN_TOKEN and LINKEDIN_ACCOUNT_ID:
+    AVAILABLE_PLATFORMS.append("LinkedIn Ads")
+if TIKTOK_TOKEN and TIKTOK_ADVERTISER_ID:
+    AVAILABLE_PLATFORMS.append("TikTok Ads")
 
 # ─── Clasificador de mercado ──────────────────────────────────────────────────
 def parse_mercado(name: str, platform: str) -> str:
@@ -127,7 +157,7 @@ def parse_mercado(name: str, platform: str) -> str:
         if n.startswith("LAT_"):
             return "Latam"
         return "Otro"
-    # Google: buscar tokens en el nombre de campaña
+    # Google, LinkedIn, TikTok: buscar tokens en el nombre de campaña
     if any(t in n for t in ["LATAM", "- LAT", "_LAT", "LAT_"]):
         return "Latam"
     if any(t in n for t in ["- ES", "- NAC", "- BCN", "- CAT", "_ES", "_NAC", "_BCN", "_CAT", "- NACI"]):
@@ -249,6 +279,161 @@ def get_meta_ads_data(start: str, end: str) -> pd.DataFrame:
         st.error(f"Error Meta Ads: {e}")
         return pd.DataFrame()
 
+# ─── Conector LinkedIn Ads ────────────────────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_linkedin_ads_data(start: str, end: str) -> pd.DataFrame:
+    """
+    Requiere en secrets:
+      LINKEDIN_ACCESS_TOKEN  — OAuth 2.0 token con scopes r_ads + r_ads_reporting
+      LINKEDIN_AD_ACCOUNT_ID — ID numérico de la cuenta de anuncios
+    """
+    if not LINKEDIN_TOKEN or not LINKEDIN_ACCOUNT_ID:
+        return pd.DataFrame()
+    try:
+        headers = {
+            "Authorization": f"Bearer {LINKEDIN_TOKEN}",
+            "LinkedIn-Version": "202405",
+            "X-Restli-Protocol-Version": "2.0.0",
+        }
+
+        # 1. Obtener nombres de campañas
+        camp_resp = requests.get(
+            "https://api.linkedin.com/rest/adCampaigns",
+            headers=headers,
+            params={
+                "q": "search",
+                "search.account.values[0]": f"urn:li:sponsoredAccount:{LINKEDIN_ACCOUNT_ID}",
+                "fields": "id,name",
+                "count": 200,
+            },
+            timeout=30,
+        )
+        campaign_names = {}
+        if camp_resp.status_code == 200:
+            for el in camp_resp.json().get("elements", []):
+                campaign_names[str(el["id"])] = el.get("name", f"LI_{el['id']}")
+
+        # 2. Obtener métricas diarias por campaña
+        sy, sm, sd = start.split("-")
+        ey, em, ed = end.split("-")
+        r = requests.get(
+            "https://api.linkedin.com/rest/adAnalytics",
+            headers=headers,
+            params={
+                "q": "analytics",
+                "pivot": "CAMPAIGN",
+                "timeGranularity": "DAILY",
+                "accounts[0]": f"urn:li:sponsoredAccount:{LINKEDIN_ACCOUNT_ID}",
+                "dateRange.start.year":  sy,
+                "dateRange.start.month": str(int(sm)),
+                "dateRange.start.day":   str(int(sd)),
+                "dateRange.end.year":    ey,
+                "dateRange.end.month":   str(int(em)),
+                "dateRange.end.day":     str(int(ed)),
+                "fields": "costInLocalCurrency,externalWebsiteConversions,clicks,impressions,pivotValues,dateRange",
+                "count": 500,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+
+        rows = []
+        for item in data.get("elements", []):
+            gasto = float(item.get("costInLocalCurrency", 0) or 0)
+            if gasto == 0:
+                continue
+
+            pivot_vals  = item.get("pivotValues", [])
+            campaign_id = pivot_vals[0].replace("urn:li:sponsoredCampaign:", "") if pivot_vals else ""
+            camp_name   = campaign_names.get(campaign_id, f"LI_{campaign_id}")
+
+            dr    = item.get("dateRange", {}).get("start", {})
+            fecha = f"{dr.get('year', 2024)}-{str(dr.get('month', 1)).zfill(2)}-{str(dr.get('day', 1)).zfill(2)}"
+
+            rows.append({
+                "fecha":        fecha,
+                "campaña":      camp_name,
+                "gasto":        gasto,
+                "conversiones": float(item.get("externalWebsiteConversions", 0) or 0),
+                "clics":        int(item.get("clicks", 0) or 0),
+                "impresiones":  int(item.get("impressions", 0) or 0),
+                "plataforma":   "LinkedIn Ads",
+            })
+
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df["fecha"]   = pd.to_datetime(df["fecha"])
+        df["mercado"] = df["campaña"].apply(lambda x: parse_mercado(x, "linkedin"))
+        return df
+
+    except Exception as e:
+        st.error(f"Error LinkedIn Ads: {e}")
+        return pd.DataFrame()
+
+# ─── Conector TikTok Ads ──────────────────────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_tiktok_ads_data(start: str, end: str) -> pd.DataFrame:
+    """
+    Requiere en secrets:
+      TIKTOK_ACCESS_TOKEN   — Long-term access token de TikTok for Business
+      TIKTOK_ADVERTISER_ID  — ID del anunciante en TikTok Ads Manager
+    """
+    if not TIKTOK_TOKEN or not TIKTOK_ADVERTISER_ID:
+        return pd.DataFrame()
+    try:
+        r = requests.get(
+            "https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/",
+            headers={"Access-Token": TIKTOK_TOKEN},
+            params={
+                "advertiser_id": TIKTOK_ADVERTISER_ID,
+                "report_type":   "BASIC",
+                "dimensions":    json.dumps(["campaign_id", "stat_time_day"]),
+                "metrics":       json.dumps([
+                    "spend", "real_time_conversions", "clicks", "impressions", "campaign_name"
+                ]),
+                "start_date": start,
+                "end_date":   end,
+                "page_size":  1000,
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+
+        if data.get("code") != 0:
+            st.error(f"TikTok Ads API: {data.get('message', 'Error desconocido')}")
+            return pd.DataFrame()
+
+        rows = []
+        for item in data.get("data", {}).get("list", []):
+            dims    = item.get("dimensions", {})
+            metrics = item.get("metrics", {})
+            gasto   = float(metrics.get("spend", 0) or 0)
+            if gasto == 0:
+                continue
+            rows.append({
+                "fecha":        dims.get("stat_time_day", start)[:10],
+                "campaña":      metrics.get("campaign_name", f"TK_{dims.get('campaign_id', '')}"),
+                "gasto":        gasto,
+                "conversiones": float(metrics.get("real_time_conversions", 0) or 0),
+                "clics":        int(metrics.get("clicks", 0) or 0),
+                "impresiones":  int(metrics.get("impressions", 0) or 0),
+                "plataforma":   "TikTok Ads",
+            })
+
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df["fecha"]   = pd.to_datetime(df["fecha"])
+        df["mercado"] = df["campaña"].apply(lambda x: parse_mercado(x, "tiktok"))
+        return df
+
+    except Exception as e:
+        st.error(f"Error TikTok Ads: {e}")
+        return pd.DataFrame()
+
 # ─── Sidebar — filtros ────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Filtros")
@@ -284,8 +469,8 @@ with st.sidebar:
     )
     plataforma_filtro = st.multiselect(
         "Plataforma",
-        ["Google Ads", "Meta Ads"],
-        default=["Google Ads", "Meta Ads"],
+        AVAILABLE_PLATFORMS,
+        default=AVAILABLE_PLATFORMS,
     )
 
     st.divider()
@@ -297,13 +482,25 @@ with st.sidebar:
 
 # ─── Carga de datos ───────────────────────────────────────────────────────────
 st.title("📊 Hofmann · Inversión Publicitaria")
-st.caption("Google Ads + Meta Ads · Caché actualizado cada hora")
 
+# Caption dinámico con plataformas activas
+active_source_labels = []
 with st.spinner("Cargando datos..."):
-    df_google = get_google_ads_data(str(start_d), str(end_d))
-    df_meta   = get_meta_ads_data(str(start_d), str(end_d))
+    df_google   = get_google_ads_data(str(start_d), str(end_d))
+    df_meta     = get_meta_ads_data(str(start_d), str(end_d))
+    df_linkedin = get_linkedin_ads_data(str(start_d), str(end_d))
+    df_tiktok   = get_tiktok_ads_data(str(start_d), str(end_d))
 
-df_all = pd.concat([df_google, df_meta], ignore_index=True)
+for plat, df_plat in [
+    ("Google Ads", df_google), ("Meta Ads", df_meta),
+    ("LinkedIn Ads", df_linkedin), ("TikTok Ads", df_tiktok)
+]:
+    if not df_plat.empty:
+        active_source_labels.append(plat)
+
+st.caption(" + ".join(active_source_labels) + " · Caché actualizado cada hora")
+
+df_all = pd.concat([df_google, df_meta, df_linkedin, df_tiktok], ignore_index=True)
 
 if df_all.empty:
     st.warning("No hay datos para el período seleccionado. Comprueba las credenciales.")
@@ -322,43 +519,39 @@ if df.empty:
     st.stop()
 
 # ─── KPIs ─────────────────────────────────────────────────────────────────────
-def platform_kpis(df, plat):
-    sub = df[df["plataforma"] == plat]
-    g = sub["gasto"].sum()
-    c = sub["conversiones"].sum()
-    return g, c, (g / c if c > 0 else 0)
-
 total_g   = df["gasto"].sum()
 total_c   = df["conversiones"].sum()
 total_cpl = total_g / total_c if total_c > 0 else 0
 
-g_ga,   c_ga,   cpl_ga   = platform_kpis(df, "Google Ads")
-g_meta, c_meta, cpl_meta = platform_kpis(df, "Meta Ads")
-
 k1, k2, k3 = st.columns(3)
-
 with k1:
     st.metric("💰 Inversión Total", f"€ {total_g:,.0f}")
-    kk1, kk2 = st.columns(2)
-    kk1.metric("🟠 Google Ads", f"€ {g_ga:,.0f}")
-    kk2.metric("🔵 Meta Ads",   f"€ {g_meta:,.0f}")
-
 with k2:
     st.metric("🎯 Conversiones", f"{total_c:,.0f}")
-    kk1, kk2 = st.columns(2)
-    kk1.metric("🟠 Google", f"{c_ga:,.0f}", help="Conversiones Google Ads")
-    kk2.metric("🔵 Meta",   f"{c_meta:,.0f}", help="Conversiones Meta Ads")
-
 with k3:
     st.metric("📈 CPL Total", f"€ {total_cpl:,.2f}")
-    kk1, kk2 = st.columns(2)
-    kk1.metric("🟠 CPL Google", f"€ {cpl_ga:,.2f}")
-    kk2.metric("🔵 CPL Meta",   f"€ {cpl_meta:,.2f}")
+
+# Sub-KPIs dinámicos por plataforma
+platforms_in_df = [p for p in AVAILABLE_PLATFORMS if p in df["plataforma"].values]
+if platforms_in_df:
+    pcols = st.columns(len(platforms_in_df))
+    for i, plat in enumerate(platforms_in_df):
+        icon = PLATFORM_ICONS.get(plat, "⚫")
+        sub  = df[df["plataforma"] == plat]
+        g    = sub["gasto"].sum()
+        c    = sub["conversiones"].sum()
+        cpl  = g / c if c > 0 else 0
+        with pcols[i]:
+            with st.container(border=True):
+                st.markdown(f"**{icon} {plat}**")
+                cc1, cc2, cc3 = st.columns(3)
+                cc1.metric("Inversión",    f"€ {g:,.0f}")
+                cc2.metric("Conversiones", f"{c:,.0f}")
+                cc3.metric("CPL",          f"€ {cpl:,.2f}")
 
 st.divider()
 
 # ─── Preparar datos diarios ───────────────────────────────────────────────────
-# Agrupaciones diarias reutilizadas en todos los gráficos
 df_day_total = (
     df.groupby("fecha")
     .agg(gasto=("gasto", "sum"), conversiones=("conversiones", "sum"))
@@ -482,8 +675,9 @@ with col_f:
     st.caption("Por plataforma")
     df_cpl_p = df_day_plat.dropna(subset=["CPL"])
     fig6 = go.Figure()
-    for plat, color in COLORS.items():
-        sub = df_cpl_p[df_cpl_p["plataforma"] == plat]
+    for plat in df_cpl_p["plataforma"].unique():
+        color = COLORS.get(plat, "#888888")
+        sub   = df_cpl_p[df_cpl_p["plataforma"] == plat]
         if sub.empty:
             continue
         fig6.add_trace(go.Scatter(
@@ -543,7 +737,7 @@ st.dataframe(
 
 st.divider()
 
-# ─── Gráfico 2: CPL por campaña ───────────────────────────────────────────────
+# ─── Gráfico: CPL por campaña ─────────────────────────────────────────────────
 st.subheader("📈 CPL por Campaña (campañas con conversiones)")
 
 df_cpl = df_camp[df_camp["conversiones"] > 0].copy()

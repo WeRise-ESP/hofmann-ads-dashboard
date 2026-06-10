@@ -396,9 +396,10 @@ def get_tiktok_ads_data(start: str, end: str) -> pd.DataFrame:
             params={
                 "advertiser_id": TIKTOK_ADVERTISER_ID,
                 "report_type":   "BASIC",
+                "data_level":    "AUCTION_CAMPAIGN",
                 "dimensions":    json.dumps(["campaign_id", "stat_time_day"]),
                 "metrics":       json.dumps([
-                    "spend", "real_time_conversions", "clicks", "impressions", "campaign_name"
+                    "spend", "result", "clicks", "impressions", "campaign_name"
                 ]),
                 "start_date": start,
                 "end_date":   end,
@@ -424,7 +425,7 @@ def get_tiktok_ads_data(start: str, end: str) -> pd.DataFrame:
                 "fecha":        dims.get("stat_time_day", start)[:10],
                 "campaña":      metrics.get("campaign_name", f"TK_{dims.get('campaign_id', '')}"),
                 "gasto":        gasto,
-                "conversiones": float(metrics.get("real_time_conversions", 0) or 0),
+                "conversiones": float(metrics.get("result", 0) or 0),
                 "clics":        int(metrics.get("clicks", 0) or 0),
                 "impresiones":  int(metrics.get("impressions", 0) or 0),
                 "plataforma":   "TikTok Ads",

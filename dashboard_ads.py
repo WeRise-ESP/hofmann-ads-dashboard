@@ -155,6 +155,11 @@ if linkedin_via_api or linkedin_via_sheets:
 if TIKTOK_TOKEN and TIKTOK_ADVERTISER_ID:
     AVAILABLE_PLATFORMS.append("TikTok Ads")
 
+# ─── Helpers de métricas ──────────────────────────────────────────────────────
+def calc_cpl(gasto: pd.Series, conversiones: pd.Series) -> pd.Series:
+    """CPL real si hay conversiones; si no → gasto completo (inversión sin resultado)."""
+    return gasto.where(conversiones == 0, gasto / conversiones.replace(0, 1))
+
 # ─── Clasificador de mercado ──────────────────────────────────────────────────
 def parse_mercado(name: str, platform: str) -> str:
     n = name.upper()
@@ -684,10 +689,6 @@ df_day_plat = (
 )
 df_day_plat["fecha_str"] = df_day_plat["fecha"].dt.strftime("%d/%m")
 df_day_plat["CPL"] = calc_cpl(df_day_plat["gasto"], df_day_plat["conversiones"])
-
-# CPL: si hay conversiones → gasto/conversiones; si no → gasto (inversión sin resultado)
-def calc_cpl(gasto: pd.Series, conversiones: pd.Series) -> pd.Series:
-    return gasto.where(conversiones == 0, gasto / conversiones.replace(0, 1))
 
 GRID = "rgba(0,0,0,0.08)"
 YAXIS_DEFAULT  = dict(gridcolor=GRID)

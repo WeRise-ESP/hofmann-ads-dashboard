@@ -674,9 +674,7 @@ df_day_total = (
     .sort_values("fecha")
 )
 df_day_total["fecha_str"] = df_day_total["fecha"].dt.strftime("%d/%m")
-df_day_total["CPL"] = (
-    df_day_total["gasto"] / df_day_total["conversiones"].replace(0, float("nan"))
-)
+df_day_total["CPL"] = calc_cpl(df_day_total["gasto"], df_day_total["conversiones"])
 
 df_day_plat = (
     df.groupby(["fecha", "plataforma"])
@@ -685,9 +683,11 @@ df_day_plat = (
     .sort_values("fecha")
 )
 df_day_plat["fecha_str"] = df_day_plat["fecha"].dt.strftime("%d/%m")
-df_day_plat["CPL"] = (
-    df_day_plat["gasto"] / df_day_plat["conversiones"].replace(0, float("nan"))
-)
+df_day_plat["CPL"] = calc_cpl(df_day_plat["gasto"], df_day_plat["conversiones"])
+
+# CPL: si hay conversiones → gasto/conversiones; si no → gasto (inversión sin resultado)
+def calc_cpl(gasto: pd.Series, conversiones: pd.Series) -> pd.Series:
+    return gasto.where(conversiones == 0, gasto / conversiones.replace(0, 1))
 
 GRID = "rgba(0,0,0,0.08)"
 YAXIS_DEFAULT  = dict(gridcolor=GRID)
@@ -771,7 +771,7 @@ col_e, col_f = st.columns(2)
 
 with col_e:
     st.caption("Total (todas las plataformas)")
-    df_cpl_t = df_day_total.dropna(subset=["CPL"])
+    df_cpl_t = df_day_total
     fig5 = go.Figure()
     fig5.add_trace(go.Scatter(
         x=df_cpl_t["fecha_str"], y=df_cpl_t["CPL"],
@@ -788,7 +788,7 @@ with col_e:
 
 with col_f:
     st.caption("Por plataforma")
-    df_cpl_p = df_day_plat.dropna(subset=["CPL"])
+    df_cpl_p = df_day_plat
     fig6 = go.Figure()
     for plat in df_cpl_p["plataforma"].unique():
         color = COLORS.get(plat, "#888888")
@@ -823,9 +823,7 @@ df_camp = (
     )
     .reset_index()
 )
-df_camp["CPL (€)"] = (
-    df_camp["gasto"] / df_camp["conversiones"].replace(0, float("nan"))
-).round(2)
+df_camp["CPL (€)"] = calc_cpl(df_camp["gasto"], df_camp["conversiones"]).round(2)
 df_camp["CPC (€)"] = (
     df_camp["gasto"] / df_camp["clics"].replace(0, float("nan"))
 ).round(2)
@@ -853,10 +851,10 @@ st.dataframe(
 st.divider()
 
 # ─── Gráfico: CPL por campaña ─────────────────────────────────────────────────
-st.subheader("📈 CPL por Campaña (campañas con conversiones)")
+st.subheader("📈 CPL por Campaña")
 
-df_cpl = df_camp[df_camp["conversiones"] > 0].copy()
-df_cpl["CPL"] = df_cpl["gasto"] / df_cpl["conversiones"]
+df_cpl = df_camp.copy()
+df_cpl["CPL"] = calc_cpl(df_cpl["gasto"], df_cpl["conversiones"])
 df_cpl = df_cpl.sort_values("CPL", ascending=True).head(25)
 
 fig_cpl = px.bar(

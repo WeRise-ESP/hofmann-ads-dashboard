@@ -135,8 +135,8 @@ LINKEDIN_SHEET_URL  = _s("LINKEDIN_SHEET_URL")
 COLORS = {
     "Google Ads":   "#FF6D00",
     "Meta Ads":     "#1877F2",
-    "LinkedIn Ads": "#0A66C2",
-    "TikTok Ads":   "#FF0050",
+    "LinkedIn Ads": "#00B050",
+    "TikTok Ads":   "#010101",
 }
 
 PLATFORM_ICONS = {

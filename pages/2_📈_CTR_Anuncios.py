@@ -224,7 +224,7 @@ with tab_heat:
 
     pivot = build_pivot(df, "anuncio")
 
-    styled = pivot.style.applymap(ctr_bg).format(lambda v: f"{v:.2f}%" if pd.notna(v) else "—")
+    styled = pivot.style.map(ctr_bg).format(lambda v: f"{v:.2f}%" if pd.notna(v) else "—")
     st.dataframe(styled, use_container_width=True, height=min(60 + len(pivot) * 36, 700))
 
     st.download_button(
@@ -250,7 +250,7 @@ with tab_camp:
     with col_a:
         st.markdown(f"**Heatmap CTR · {camp_sel}**")
         pivot_camp = build_pivot(df_camp, "anuncio")
-        styled_camp = pivot_camp.style.applymap(ctr_bg).format(
+        styled_camp = pivot_camp.style.map(ctr_bg).format(
             lambda v: f"{v:.2f}%" if pd.notna(v) else "—"
         )
         st.dataframe(styled_camp, use_container_width=True, height=min(100 + len(pivot_camp) * 36, 500))
@@ -377,7 +377,7 @@ with tab_formato:
     st.markdown("---")
     st.markdown("**Heatmap CTR por formato · semana a semana**")
     pivot_fmt = build_pivot(df[df["formato"].isin(df_fmt_weekly["formato"].unique())], "formato")
-    styled_fmt = pivot_fmt.style.applymap(ctr_bg).format(lambda v: f"{v:.2f}%" if pd.notna(v) else "—")
+    styled_fmt = pivot_fmt.style.map(ctr_bg).format(lambda v: f"{v:.2f}%" if pd.notna(v) else "—")
     st.dataframe(styled_fmt, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -421,7 +421,7 @@ with tab_evol:
     st.markdown("---")
     st.markdown("**Tabla completa semanal**")
     pivot_evol = build_pivot(df, grp)
-    styled_evol = pivot_evol.style.applymap(ctr_bg).format(
+    styled_evol = pivot_evol.style.map(ctr_bg).format(
         lambda v: f"{v:.2f}%" if pd.notna(v) else "—"
     )
     st.dataframe(styled_evol, use_container_width=True, height=min(100 + len(pivot_evol) * 36, 600))

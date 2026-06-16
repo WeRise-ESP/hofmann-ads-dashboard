@@ -112,16 +112,12 @@ def ctr_bg(val):
         return "background-color: #f5f5f5; color: #ccc"
     if val < 0.01:
         return "background-color: #f5f5f5; color: #bbb"
-    if val < 0.70:
+    if val < 1.00:
         return "background-color: #c0392b; color: #fff"
-    if val < 0.90:
+    if val < 2.00:
         return "background-color: #e67e22; color: #fff"
-    if val < 1.10:
-        return "background-color: #f1c40f; color: #555"
-    if val < 1.50:
+    if val < 3.00:
         return "background-color: #a9d18e; color: #1a4020"
-    if val < 2.50:
-        return "background-color: #27ae60; color: #fff"
     return "background-color: #1a5e38; color: #fff"
 
 
@@ -216,7 +212,7 @@ tab_heat, tab_camp, tab_formato, tab_evol = st.tabs([
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_heat:
     st.subheader("CTR % por anuncio · semana a semana")
-    st.caption("Formato condicional: 🔴 < 0.7% · 🟠 0.7-0.9% · 🟡 0.9-1.1% · 🟢 1.1-1.5% · 🟩 1.5-2.5% · ⬛ > 2.5%")
+    st.caption("Formato condicional: 🔴 < 1% · 🟠 1-2% · 🟢 2-3% · ⬛ > 3%")
 
     pivot = build_pivot(df, "anuncio")
 

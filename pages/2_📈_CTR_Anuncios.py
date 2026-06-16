@@ -30,6 +30,39 @@ h1, h2, h3 { font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
+# ─── Autenticación ────────────────────────────────────────────────────────────
+def _check_password():
+    if st.session_state.get("autenticado"):
+        return True
+    try:
+        pwd_correcta = st.secrets["APP_PASSWORD"]
+    except Exception:
+        pwd_correcta = os.getenv("APP_PASSWORD", "")
+
+    st.markdown("""
+    <div style="max-width:400px;margin:80px auto 0;text-align:center">
+        <h2 style="margin-bottom:8px">🔒 Hofmann Ads Dashboard</h2>
+        <p style="color:#666;font-size:14px;margin-bottom:24px">
+            Introduce la contraseña para continuar
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _, col_c, _ = st.columns([1, 2, 1])
+    with col_c:
+        pwd = st.text_input("Contraseña", type="password",
+                            label_visibility="collapsed", placeholder="Contraseña...")
+        if st.button("Entrar", use_container_width=True, type="primary"):
+            if pwd and pwd == pwd_correcta:
+                st.session_state["autenticado"] = True
+                st.rerun()
+            else:
+                st.error("Contraseña incorrecta")
+    return False
+
+if not _check_password():
+    st.stop()
+
 # ─── Credenciales ─────────────────────────────────────────────────────────────
 def _s(key, default=""):
     try:

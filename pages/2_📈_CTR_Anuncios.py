@@ -356,7 +356,7 @@ with tab_camp:
     styled_full = pivot_full.style.map(ctr_bg).format(
         lambda v: f"{v:.2f}%" if pd.notna(v) else "—"
     )
-    st.dataframe(styled_full, use_container_width=True, height=min(120 + len(pivot_full) * 38, 500))
+    st.dataframe(styled_full, use_container_width=True, height=120 + len(pivot_full) * 38)
 
     st.download_button(
         "⬇ Descargar CSV completo",

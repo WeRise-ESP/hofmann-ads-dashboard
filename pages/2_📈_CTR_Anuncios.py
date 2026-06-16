@@ -300,8 +300,37 @@ with tab_camp:
     st.markdown("### Tabla completa — todas las campañas y anuncios")
     st.caption("Filas = semanas · Columnas = campaña / anuncio · Formato condicional por CTR %")
 
+    # Filtros de la tabla completa
+    ft_col1, ft_col2 = st.columns(2)
+    with ft_col1:
+        sel_mercado_t = st.radio(
+            "Mercado", ["Todos", "Nacional", "LATAM"],
+            horizontal=True, key="tabla_mercado"
+        )
+    with ft_col2:
+        sel_modalidad_t = st.radio(
+            "Modalidad", ["Todas", "Online", "Presencial"],
+            horizontal=True, key="tabla_modalidad"
+        )
+
     # Construir pivot con columnas multinivel campaña → anuncio
     df_full = df.copy()
+
+    # Clasificar mercado y modalidad
+    df_full["_mercado_t"] = df_full["campaña"].apply(
+        lambda n: "Nacional" if n.upper().startswith("NAC_") else "LATAM"
+    )
+    df_full["_modalidad_t"] = df_full["campaña"].apply(
+        lambda n: "Online" if "online" in n.lower() else "Presencial"
+    )
+
+    if sel_mercado_t != "Todos":
+        df_full = df_full[df_full["_mercado_t"] == sel_mercado_t]
+    if sel_modalidad_t != "Todas":
+        df_full = df_full[df_full["_modalidad_t"] == sel_modalidad_t]
+
+    n_camps_filtradas = df_full["campaña"].nunique()
+    st.caption(f"{n_camps_filtradas} campaña(s) · {df_full['anuncio'].nunique()} anuncio(s)")
     semanas_order = sorted(df_full["semana_inicio"].unique())
     semana_labels = {s: df_full.loc[df_full["semana_inicio"] == s, "semana_label"].iloc[0] for s in semanas_order}
 

@@ -200,8 +200,11 @@ with st.sidebar:
 
     st.markdown("---")
 
+# Ajustar inicio al lunes de esa semana para que todas las semanas sean lun-dom
+start_lunes = start_d - timedelta(days=start_d.weekday())
+
 with st.spinner("Cargando datos Meta Ads..."):
-    df_raw = get_meta_ctr_data(str(start_d), str(end_d))
+    df_raw = get_meta_ctr_data(str(start_lunes), str(end_d))
     camp_statuses = get_campaign_statuses()
 
 if df_raw.empty:

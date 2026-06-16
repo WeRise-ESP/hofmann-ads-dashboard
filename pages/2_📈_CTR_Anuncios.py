@@ -139,6 +139,26 @@ def get_meta_ctr_data(start: str, end: str) -> pd.DataFrame:
     return df.sort_values("semana_inicio")
 
 
+# ─── Conector campañas — estado activo/pausado ────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_campaign_statuses() -> dict:
+    if not META_TOKEN:
+        return {}
+    url = f"https://graph.facebook.com/v25.0/act_{META_ACCOUNT_ID}/campaigns"
+    params = {
+        "access_token": META_TOKEN,
+        "fields": "name,status,effective_status",
+        "limit": "200",
+    }
+    statuses, next_url = {}, url
+    while next_url:
+        resp = requests.get(next_url, params=params if next_url == url else {})
+        data = resp.json()
+        for c in data.get("data", []):
+            statuses[c["name"]] = c.get("effective_status", c.get("status", "UNKNOWN"))
+        next_url = data.get("paging", {}).get("next")
+    return statuses
+
 # ─── Helpers CTR heatmap ───────────────────────────────────────────────────────
 def ctr_bg(val):
     if pd.isna(val):
@@ -182,6 +202,7 @@ with st.sidebar:
 
 with st.spinner("Cargando datos Meta Ads..."):
     df_raw = get_meta_ctr_data(str(start_d), str(end_d))
+    camp_statuses = get_campaign_statuses()
 
 if df_raw.empty:
     st.error("No hay datos disponibles. Verifica el token META_ACCESS_TOKEN en secrets.")
@@ -189,12 +210,25 @@ if df_raw.empty:
 
 # Filtros dinámicos tras carga
 with st.sidebar:
+    # Añadir estado de campaña al dataframe
+    df_raw["estado"] = df_raw["campaña"].map(camp_statuses).fillna("UNKNOWN")
+
+    sel_estado = st.radio(
+        "Campañas", ["Todas", "Solo activas"],
+        horizontal=True, key="sidebar_estado"
+    )
+
     mercados = ["Todos"] + sorted(df_raw["mercado"].unique().tolist())
     sel_mercado = st.selectbox("Mercado", mercados)
 
-    campañas_lista = sorted(df_raw["campaña"].unique().tolist())
+    # Aplicar filtro de estado para poblar lista de campañas
+    df_para_lista = df_raw.copy()
+    if sel_estado == "Solo activas":
+        df_para_lista = df_para_lista[df_para_lista["estado"] == "ACTIVE"]
+
+    campañas_lista = sorted(df_para_lista["campaña"].unique().tolist())
     if sel_mercado != "Todos":
-        campañas_lista = sorted(df_raw[df_raw["mercado"] == sel_mercado]["campaña"].unique().tolist())
+        campañas_lista = sorted(df_para_lista[df_para_lista["mercado"] == sel_mercado]["campaña"].unique().tolist())
     sel_campañas = st.multiselect("Campañas", campañas_lista, default=[])
 
     formatos_lista = sorted(df_raw["formato"].unique().tolist())
@@ -205,6 +239,8 @@ with st.sidebar:
 
 # Aplicar filtros
 df = df_raw.copy()
+if sel_estado == "Solo activas":
+    df = df[df["estado"] == "ACTIVE"]
 if sel_mercado != "Todos":
     df = df[df["mercado"] == sel_mercado]
 if sel_campañas:

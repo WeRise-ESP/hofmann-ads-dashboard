@@ -295,6 +295,47 @@ with tab_camp:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+    # ── Tabla completa: semanas × todas las campañas y anuncios ───────────────
+    st.markdown("---")
+    st.markdown("### Tabla completa — todas las campañas y anuncios")
+    st.caption("Filas = semanas · Columnas = campaña / anuncio · Formato condicional por CTR %")
+
+    # Construir pivot con columnas multinivel campaña → anuncio
+    df_full = df.copy()
+    semanas_order = sorted(df_full["semana_inicio"].unique())
+    semana_labels = {s: df_full.loc[df_full["semana_inicio"] == s, "semana_label"].iloc[0] for s in semanas_order}
+
+    pivot_full = (
+        df_full.groupby(["semana_inicio", "campaña", "anuncio"])["ctr"]
+        .mean()
+        .reset_index()
+    )
+    pivot_full["semana"] = pivot_full["semana_inicio"].map(semana_labels)
+    pivot_full = pivot_full.pivot_table(
+        index="semana",
+        columns=["campaña", "anuncio"],
+        values="ctr",
+        aggfunc="mean",
+    ).round(2)
+
+    # Reordenar filas por fecha
+    label_to_date = {v: k for k, v in semana_labels.items()}
+    pivot_full = pivot_full.loc[
+        [l for l in [semana_labels[s] for s in semanas_order] if l in pivot_full.index]
+    ]
+
+    styled_full = pivot_full.style.map(ctr_bg).format(
+        lambda v: f"{v:.2f}%" if pd.notna(v) else "—"
+    )
+    st.dataframe(styled_full, use_container_width=True, height=min(120 + len(pivot_full) * 38, 500))
+
+    st.download_button(
+        "⬇ Descargar CSV completo",
+        data=pivot_full.to_csv().encode("utf-8"),
+        file_name=f"ctr_completo_{start_d}_{end_d}.csv",
+        mime="text/csv",
+    )
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — Por formato
 # ══════════════════════════════════════════════════════════════════════════════

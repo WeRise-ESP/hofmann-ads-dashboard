@@ -446,6 +446,41 @@ with tab_formato:
     styled_fmt = pivot_fmt.style.map(ctr_bg).format(lambda v: f"{v:.2f}%" if pd.notna(v) else "—")
     st.dataframe(styled_fmt, use_container_width=True)
 
+    # ── Por formato: todas las campañas y anuncios ───────────────────────────
+    st.markdown("---")
+    st.markdown("### Campañas y anuncios por formato")
+
+    fmt_sel = st.selectbox(
+        "Selecciona formato", sorted(df["formato"].unique().tolist()), key="sel_formato_detalle"
+    )
+    df_fmt_detalle = df[df["formato"] == fmt_sel]
+
+    if df_fmt_detalle.empty:
+        st.info("Sin datos para este formato en el periodo seleccionado.")
+    else:
+        st.caption(f"{df_fmt_detalle['campaña'].nunique()} campañas · {df_fmt_detalle['anuncio'].nunique()} anuncios con formato **{fmt_sel}**")
+
+        resumen_fmt_det = (
+            df_fmt_detalle.groupby(["campaña", "anuncio"])
+            .agg(
+                Impresiones=("impressions", "sum"),
+                Clics=("clicks", "sum"),
+                Inversión=("spend", "sum"),
+            )
+            .assign(CTR=lambda x: (x["Clics"] / x["Impresiones"] * 100).round(2))
+            .sort_values("CTR", ascending=False)
+            .reset_index()
+        )
+        resumen_fmt_det["CTR"]         = resumen_fmt_det["CTR"].apply(lambda v: f"{v:.2f}%")
+        resumen_fmt_det["Impresiones"] = resumen_fmt_det["Impresiones"].apply(lambda v: f"{v:,}")
+        resumen_fmt_det["Clics"]       = resumen_fmt_det["Clics"].apply(lambda v: f"{v:,}")
+        resumen_fmt_det["Inversión"]   = resumen_fmt_det["Inversión"].apply(lambda v: f"€{v:,.0f}")
+        st.dataframe(
+            resumen_fmt_det.set_index(["campaña", "anuncio"]),
+            use_container_width=True,
+            height=120 + len(resumen_fmt_det) * 36,
+        )
+
     # ── Por campaña ───────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### Desglose por formato · por campaña")

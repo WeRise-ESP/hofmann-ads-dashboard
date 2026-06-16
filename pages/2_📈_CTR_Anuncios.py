@@ -22,15 +22,11 @@ st.set_page_config(
 # ─── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-[data-testid="stSidebar"] { background-color: #0f1117; }
-[data-testid="stSidebar"] * { color: #e0e0e0 !important; }
-[data-testid="stSidebar"] [data-baseweb="select"] > div { background-color: #1e2130; }
 [data-testid="stSidebar"] [data-baseweb="tag"] {
     background-color: #1877F2 !important;
     color: #ffffff !important;
 }
 h1, h2, h3 { font-weight: 600; }
-.metric-row { display: flex; gap: 16px; margin-bottom: 1rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -143,7 +139,7 @@ def build_pivot(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
 
 # ─── Sidebar — filtros ────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/Hofmann_logo.svg/200px-Hofmann_logo.svg.png", width=120)
+    st.markdown("### 📈 CTR Anuncios")
     st.markdown("---")
     st.markdown("### Filtros")
 

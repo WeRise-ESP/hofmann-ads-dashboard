@@ -446,6 +446,86 @@ with tab_formato:
     styled_fmt = pivot_fmt.style.map(ctr_bg).format(lambda v: f"{v:.2f}%" if pd.notna(v) else "—")
     st.dataframe(styled_fmt, use_container_width=True)
 
+    # ── Por campaña ───────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### Desglose por formato · por campaña")
+
+    camp_fmt_sel = st.selectbox(
+        "Selecciona campaña", sorted(df["campaña"].unique().tolist()), key="fmt_camp_sel"
+    )
+    df_camp_fmt = df[df["campaña"] == camp_fmt_sel]
+
+    resumen_camp_fmt = (
+        df_camp_fmt.groupby("formato")
+        .agg(
+            Impresiones=("impressions", "sum"),
+            Clics=("clicks", "sum"),
+            Inversión=("spend", "sum"),
+            Anuncios=("anuncio", "nunique"),
+        )
+        .assign(CTR=lambda x: (x["Clics"] / x["Impresiones"] * 100).round(2))
+        .sort_values("CTR", ascending=False)
+        .reset_index()
+    )
+
+    if resumen_camp_fmt.empty:
+        st.info("Sin datos para esta campaña en el periodo seleccionado.")
+    else:
+        col_cf1, col_cf2 = st.columns([2, 3])
+
+        with col_cf1:
+            st.markdown(f"**CTR por formato · {camp_fmt_sel}**")
+            fig_cf = px.bar(
+                resumen_camp_fmt, x="CTR", y="formato", orientation="h",
+                color="formato",
+                color_discrete_map=colores,
+                text=resumen_camp_fmt["CTR"].apply(lambda v: f"{v:.2f}%"),
+                height=max(200, len(resumen_camp_fmt) * 60),
+            )
+            fig_cf.update_traces(textposition="outside")
+            fig_cf.update_layout(
+                showlegend=False, plot_bgcolor="white", paper_bgcolor="white",
+                xaxis=dict(ticksuffix="%", gridcolor="#efefef"),
+                yaxis_title="", xaxis_title="CTR %",
+            )
+            st.plotly_chart(fig_cf, use_container_width=True)
+
+        with col_cf2:
+            st.markdown(f"**Tabla resumen · {camp_fmt_sel}**")
+            df_cf_display = resumen_camp_fmt.copy()
+            df_cf_display["CTR"]         = df_cf_display["CTR"].apply(lambda v: f"{v:.2f}%")
+            df_cf_display["Impresiones"] = df_cf_display["Impresiones"].apply(lambda v: f"{v:,}")
+            df_cf_display["Clics"]       = df_cf_display["Clics"].apply(lambda v: f"{v:,}")
+            df_cf_display["Inversión"]   = df_cf_display["Inversión"].apply(lambda v: f"€{v:,.0f}")
+            st.dataframe(df_cf_display.set_index("formato"), use_container_width=True)
+
+        # Evolución semanal por formato para esa campaña
+        df_cf_weekly = (
+            df_camp_fmt.groupby(["semana_inicio", "semana_label", "formato"])
+            .agg(impressions=("impressions", "sum"), clicks=("clicks", "sum"))
+            .reset_index()
+        )
+        df_cf_weekly["ctr"] = (df_cf_weekly["clicks"] / df_cf_weekly["impressions"] * 100).round(2)
+        df_cf_weekly = df_cf_weekly[df_cf_weekly["impressions"] > 50]
+
+        if not df_cf_weekly.empty:
+            st.markdown(f"**Evolución semanal por formato · {camp_fmt_sel}**")
+            fig_cf_evol = px.line(
+                df_cf_weekly,
+                x="semana_label", y="ctr", color="formato",
+                markers=True,
+                color_discrete_map=colores,
+                labels={"ctr": "CTR %", "semana_label": "Semana", "formato": "Formato"},
+                height=320,
+            )
+            fig_cf_evol.update_layout(
+                plot_bgcolor="white", paper_bgcolor="white",
+                legend=dict(orientation="h", y=-0.25),
+                yaxis=dict(ticksuffix="%", gridcolor="#efefef"),
+                xaxis=dict(gridcolor="#efefef"),
+            )
+            st.plotly_chart(fig_cf_evol, use_container_width=True)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 4 — Evolución semanal completa
 # ══════════════════════════════════════════════════════════════════════════════

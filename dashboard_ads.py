@@ -100,6 +100,26 @@ def _check_password():
 if not _check_password():
     st.stop()
 
+# ─── TikTok OAuth callback (captura auth_code al volver del flujo OAuth) ──────
+_qp = st.query_params
+if "auth_code" in _qp and _qp.get("state") == "hofmann":
+    with st.spinner("Renovando token de TikTok..."):
+        _resp = requests.post(
+            "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+            json={"app_id": TIKTOK_APP_ID, "secret": TIKTOK_APP_SECRET,
+                  "auth_code": _qp["auth_code"]},
+            timeout=15,
+        )
+        _d = _resp.json()
+        if _d.get("code") == 0:
+            st.session_state["tt_token"] = _d["data"]["access_token"]
+            st.session_state.pop("tt_expired", None)
+            st.query_params.clear()
+            st.rerun()
+        else:
+            st.error(f"Error renovando token TikTok: {_d.get('message')}")
+            st.query_params.clear()
+
 # ─── Credenciales ─────────────────────────────────────────────────────────────
 def _s(key, default=""):
     try:
@@ -124,8 +144,15 @@ LINKEDIN_TOKEN      = _s("LINKEDIN_ACCESS_TOKEN")
 LINKEDIN_ACCOUNT_ID = _s("LINKEDIN_AD_ACCOUNT_ID")
 
 # TikTok Ads (opcional — se activa cuando haya credenciales)
-TIKTOK_TOKEN        = _s("TIKTOK_ACCESS_TOKEN")
+TIKTOK_TOKEN         = _s("TIKTOK_ACCESS_TOKEN")
 TIKTOK_ADVERTISER_ID = _s("TIKTOK_ADVERTISER_ID")
+TIKTOK_APP_ID        = _s("TIKTOK_APP_ID",     "7649605007397879824")
+TIKTOK_APP_SECRET    = _s("TIKTOK_APP_SECRET",  "4444ab6a8662ad49835f30c57272c40db4e4ac95")
+TIKTOK_AUTH_URL = (
+    "https://business-api.tiktok.com/portal/auth"
+    f"?app_id={TIKTOK_APP_ID}&state=hofmann"
+    "&redirect_uri=https%3A%2F%2Fhofmann-ads-dashboard.streamlit.app"
+)
 
 # LinkedIn Ads — fuente alternativa vía Google Sheets (CSV manual desde Campaign Manager)
 # Formato del sheet: fecha | campaña | gasto | conversiones | clics | impresiones
@@ -146,13 +173,16 @@ PLATFORM_ICONS = {
     "TikTok Ads":   "🩷",
 }
 
+# Token efectivo de TikTok: sesión tiene prioridad sobre secrets
+TIKTOK_EFFECTIVE_TOKEN = st.session_state.get("tt_token", TIKTOK_TOKEN)
+
 # Plataformas activas según credenciales disponibles
 AVAILABLE_PLATFORMS = ["Google Ads", "Meta Ads"]
 linkedin_via_api    = bool(LINKEDIN_TOKEN and LINKEDIN_ACCOUNT_ID)
 linkedin_via_sheets = bool(LINKEDIN_SHEET_URL)
 if linkedin_via_api or linkedin_via_sheets:
     AVAILABLE_PLATFORMS.append("LinkedIn Ads")
-if TIKTOK_TOKEN and TIKTOK_ADVERTISER_ID:
+if TIKTOK_EFFECTIVE_TOKEN and TIKTOK_ADVERTISER_ID:
     AVAILABLE_PLATFORMS.append("TikTok Ads")
 
 # ─── Helpers de métricas ──────────────────────────────────────────────────────
@@ -386,18 +416,19 @@ def get_linkedin_ads_data(start: str, end: str) -> pd.DataFrame:
 
 # ─── Conector TikTok Ads ──────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_tiktok_ads_data(start: str, end: str) -> pd.DataFrame:
+def get_tiktok_ads_data(start: str, end: str, token: str) -> pd.DataFrame:
     """
     Requiere en secrets:
-      TIKTOK_ACCESS_TOKEN   — Long-term access token de TikTok for Business
+      TIKTOK_ACCESS_TOKEN   — Access token de TikTok for Business (24h)
       TIKTOK_ADVERTISER_ID  — ID del anunciante en TikTok Ads Manager
+    El token se renueva automáticamente desde el dashboard via OAuth.
     """
-    if not TIKTOK_TOKEN or not TIKTOK_ADVERTISER_ID:
+    if not token or not TIKTOK_ADVERTISER_ID:
         return pd.DataFrame()
     try:
         r = requests.get(
             "https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/",
-            headers={"Access-Token": TIKTOK_TOKEN},
+            headers={"Access-Token": token},
             params={
                 "advertiser_id": TIKTOK_ADVERTISER_ID,
                 "report_type":   "BASIC",
@@ -415,6 +446,9 @@ def get_tiktok_ads_data(start: str, end: str) -> pd.DataFrame:
         r.raise_for_status()
         data = r.json()
 
+        if data.get("code") in (40001, 40002, 40004):
+            st.session_state["tt_expired"] = True
+            return pd.DataFrame()
         if data.get("code") != 0:
             st.error(f"TikTok Ads API: {data.get('message', 'Error desconocido')}")
             return pd.DataFrame()
@@ -589,6 +623,13 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
+    # Botón renovación TikTok — aparece cuando el token caduca
+    if TIKTOK_ADVERTISER_ID and st.session_state.get("tt_expired"):
+        st.divider()
+        st.warning("⚠️ Token TikTok caducado")
+        st.link_button("🔄 Renovar acceso TikTok", TIKTOK_AUTH_URL,
+                       use_container_width=True)
+
 # ─── Carga de datos ───────────────────────────────────────────────────────────
 st.title("📊 Hofmann · Inversión Publicitaria")
 
@@ -606,7 +647,7 @@ with st.spinner("Cargando datos..."):
     else:
         df_linkedin = pd.DataFrame()
 
-    df_tiktok = get_tiktok_ads_data(str(start_d), str(end_d))
+    df_tiktok = get_tiktok_ads_data(str(start_d), str(end_d), TIKTOK_EFFECTIVE_TOKEN)
 
 if not df_google.empty:
     active_source_labels.append("Google Ads")

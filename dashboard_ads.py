@@ -1162,18 +1162,38 @@ with tab2:
     kh3.metric("📍 Países",         f"{paises_n}")
     kh4.metric("📊 % Pagados",      f"{pct_pagados:.0f}%")
 
-    # Sub-KPIs por plataforma de pago
-    plats_pago_presentes = [p for p in ["Google Ads", "Meta Ads", "LinkedIn Ads", "TikTok Ads"]
-                            if p in df_hsf["plataforma_hs"].values]
-    if plats_pago_presentes:
-        pcols_hs = st.columns(len(plats_pago_presentes))
-        for i, plat in enumerate(plats_pago_presentes):
-            icon = PLATFORM_ICONS.get(plat, "⚫")
-            n    = len(df_hsf[df_hsf["plataforma_hs"] == plat])
-            with pcols_hs[i]:
-                with st.container(border=True):
-                    st.markdown(f"**{icon} {plat}**")
-                    st.metric("Leads", f"{n:,}")
+    # Sub-KPIs por todas las fuentes presentes (ordenadas: pago primero, luego orgánico)
+    _ORDEN_FUENTES = [
+        "Google Ads", "Meta Ads", "LinkedIn Ads", "TikTok Ads", "Social Pagado",
+        "SEO Orgánico", "Social Orgánico", "Email", "Directo", "Referido", "Offline", "Desconocido",
+    ]
+    _ICONS_HS = {
+        **PLATFORM_ICONS,
+        "SEO Orgánico":    "🟢",
+        "Social Orgánico": "🟣",
+        "Email":           "📧",
+        "Directo":         "🔗",
+        "Referido":        "↩️",
+        "Offline":         "🏢",
+        "Social Pagado":   "💸",
+        "Desconocido":     "❓",
+    }
+    fuentes_presentes = [f for f in _ORDEN_FUENTES if f in df_hsf["plataforma_hs"].values]
+    # añadir cualquier fuente no prevista en el orden
+    fuentes_presentes += [f for f in df_hsf["plataforma_hs"].unique() if f not in fuentes_presentes]
+
+    if fuentes_presentes:
+        MAX_COLS = 5
+        chunks = [fuentes_presentes[i:i+MAX_COLS] for i in range(0, len(fuentes_presentes), MAX_COLS)]
+        for chunk in chunks:
+            pcols_hs = st.columns(len(chunk))
+            for i, fuente in enumerate(chunk):
+                icon = _ICONS_HS.get(fuente, "⚫")
+                n    = len(df_hsf[df_hsf["plataforma_hs"] == fuente])
+                with pcols_hs[i]:
+                    with st.container(border=True):
+                        st.markdown(f"**{icon} {fuente}**")
+                        st.metric("Leads", f"{n:,}")
 
     st.divider()
 

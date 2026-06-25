@@ -1,6 +1,6 @@
 """
-Dashboard de Inversión Publicitaria — Hofmann
-Fuentes: Google Ads + Meta Ads + LinkedIn Ads + TikTok Ads
+Dashboard de Inversión Publicitaria + Leads CRM — Hofmann
+Fuentes: Google Ads + Meta Ads + LinkedIn Ads + TikTok Ads + HubSpot CRM
 """
 import streamlit as st
 import pandas as pd
@@ -156,7 +156,10 @@ TIKTOK_AUTH_URL = (
 
 # LinkedIn Ads — fuente alternativa vía Google Sheets (CSV manual desde Campaign Manager)
 # Formato del sheet: fecha | campaña | gasto | conversiones | clics | impresiones
-LINKEDIN_SHEET_URL  = _s("LINKEDIN_SHEET_URL")
+LINKEDIN_SHEET_URL = _s("LINKEDIN_SHEET_URL")
+
+# HubSpot CRM
+HUBSPOT_TOKEN = _s("HUBSPOT_TOKEN")
 
 # ─── Configuración de plataformas ─────────────────────────────────────────────
 COLORS = {
@@ -190,7 +193,7 @@ def calc_cpl(gasto: pd.Series, conversiones: pd.Series) -> pd.Series:
     """CPL real si hay conversiones; si no → gasto completo (inversión sin resultado)."""
     return gasto.where(conversiones == 0, gasto / conversiones.replace(0, 1))
 
-# ─── Clasificador de mercado ──────────────────────────────────────────────────
+# ─── Clasificador de mercado (Ads) ────────────────────────────────────────────
 def parse_mercado(name: str, platform: str) -> str:
     n = name.upper()
     if platform == "meta":
@@ -205,6 +208,83 @@ def parse_mercado(name: str, platform: str) -> str:
     if any(t in n for t in ["- ES", "- NAC", "- BCN", "- CAT", "_ES", "_NAC", "_BCN", "_CAT", "- NACI", "NAC_"]):
         return "Nacional"
     return "Otro"
+
+# ─── Clasificadores HubSpot ───────────────────────────────────────────────────
+_PAIS_MAP = {
+    "ES": "España", "SPAIN": "España", "ESPAÑA": "España",
+    "CO": "Colombia", "COLOMBIA": "Colombia",
+    "MX": "México", "MEXICO": "México", "MÉXICO": "México",
+    "AR": "Argentina", "ARGENTINA": "Argentina",
+    "PE": "Perú", "PERU": "Perú", "PERÚ": "Perú",
+    "CL": "Chile", "CHILE": "Chile",
+    "EC": "Ecuador", "ECUADOR": "Ecuador",
+    "VE": "Venezuela", "VENEZUELA": "Venezuela",
+    "BO": "Bolivia", "BOLIVIA": "Bolivia",
+    "PY": "Paraguay", "PARAGUAY": "Paraguay",
+    "UY": "Uruguay", "URUGUAY": "Uruguay",
+    "PA": "Panamá", "PANAMA": "Panamá", "PANAMÁ": "Panamá",
+    "CR": "Costa Rica", "COSTA RICA": "Costa Rica",
+    "GT": "Guatemala", "GUATEMALA": "Guatemala",
+    "HN": "Honduras", "HONDURAS": "Honduras",
+    "SV": "El Salvador", "EL SALVADOR": "El Salvador",
+    "DO": "Rep. Dominicana", "DOMINICAN REPUBLIC": "Rep. Dominicana",
+    "US": "USA", "UNITED STATES": "USA",
+    "GB": "Reino Unido", "UNITED KINGDOM": "Reino Unido",
+    "FR": "Francia", "FRANCE": "Francia",
+    "DE": "Alemania", "GERMANY": "Alemania",
+    "IT": "Italia", "ITALY": "Italia",
+}
+
+def normalizar_pais(raw: str) -> str:
+    k = (raw or "").strip().upper()
+    return _PAIS_MAP.get(k, raw.strip().title() if raw else "Desconocido") or "Desconocido"
+
+
+def parse_plataforma_hs(source: str, data1: str) -> str:
+    s  = (source or "").upper().strip()
+    d1 = (data1 or "").lower().strip()
+    if s == "PAID_SEARCH":
+        return "Google Ads"
+    if s == "PAID_SOCIAL":
+        if any(x in d1 for x in ["facebook", "instagram", "meta", "fb"]):
+            return "Meta Ads"
+        if "linkedin" in d1:
+            return "LinkedIn Ads"
+        if "tiktok" in d1:
+            return "TikTok Ads"
+        return "Social Pagado"
+    if s == "ORGANIC_SEARCH":
+        return "SEO Orgánico"
+    if s == "EMAIL_MARKETING":
+        return "Email"
+    if s == "DIRECT_TRAFFIC":
+        return "Directo"
+    if s in ("SOCIAL_MEDIA", "SOCIAL"):
+        return "Social Orgánico"
+    if s == "REFERRALS":
+        return "Referido"
+    if s == "OFFLINE":
+        return "Offline"
+    return s or "Desconocido"
+
+
+def parse_programa_hs(curso: str, modalidad: str, formulario: str) -> str:
+    if curso and curso.strip():
+        return curso.strip()
+    if modalidad and modalidad.strip():
+        return modalidad.strip()
+    form = (formulario or "").lower()
+    if "pastel" in form:
+        return "Pastelería"
+    if "cocin" in form:
+        return "Cocina"
+    if "máster" in form or "master" in form:
+        return "Máster"
+    if "diploma" in form:
+        return "Diploma"
+    if "superior" in form:
+        return "Curso Superior"
+    return "Sin programa"
 
 # ─── Conector Google Ads ──────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -577,6 +657,98 @@ def get_linkedin_sheets_data(start: str, end: str) -> pd.DataFrame:
         st.error(f"Error LinkedIn Sheets: {e}")
         return pd.DataFrame()
 
+# ─── Conector HubSpot CRM — Leads ─────────────────────────────────────────────
+_CAT_EVENTOS = {"Webinar", "Open Day", "Open Day Digital", "Sesión Informativa Online"}
+_KW_EVENTOS  = ("webinar", "open day", "openday", "puertas abiertas",
+                 "sesión informativa", "sesion informativa")
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_hubspot_leads(start: str, end: str, token: str, excluir_eventos: bool) -> pd.DataFrame:
+    if not token:
+        return pd.DataFrame()
+    try:
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        fi_ts = int(pd.Timestamp(start).timestamp() * 1000)
+        ff_ts = int(pd.Timestamp(end + " 23:59:59").timestamp() * 1000)
+
+        props = [
+            "email", "firstname", "lastname", "createdate",
+            "pais_de_residencia", "ip_country", "country",
+            "categoria_lead", "hs_object_source", "first_conversion_event_name",
+            "hs_analytics_source", "hs_analytics_source_data_1", "hs_analytics_source_data_2",
+            "hs_latest_source", "hs_latest_source_data_1", "hs_latest_source_data_2",
+            "curso", "modalidad_curso",
+        ]
+
+        rows, after = [], None
+        while True:
+            payload = {
+                "filterGroups": [{"filters": [
+                    {"propertyName": "createdate", "operator": "GTE", "value": str(fi_ts)},
+                    {"propertyName": "createdate", "operator": "LTE", "value": str(ff_ts)},
+                ]}],
+                "properties": props,
+                "limit": 100,
+            }
+            if after:
+                payload["after"] = after
+            r = requests.post(
+                "https://api.hubapi.com/crm/v3/objects/contacts/search",
+                headers=headers, json=payload, timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+
+            for c in data.get("results", []):
+                p = c["properties"]
+                cat      = (p.get("categoria_lead") or "").strip()
+                form_raw = (p.get("first_conversion_event_name") or "").lower()
+
+                if excluir_eventos:
+                    if cat in _CAT_EVENTOS:
+                        continue
+                    if any(k in form_raw for k in _KW_EVENTOS):
+                        continue
+
+                pais_raw = (
+                    p.get("pais_de_residencia") or
+                    p.get("ip_country") or
+                    p.get("country") or ""
+                )
+                # UTM source → plataforma; UTM campaign from data_2 or data_1
+                latest_src = p.get("hs_latest_source") or p.get("hs_analytics_source") or ""
+                latest_d1  = p.get("hs_latest_source_data_1") or p.get("hs_analytics_source_data_1") or ""
+                latest_d2  = p.get("hs_latest_source_data_2") or p.get("hs_analytics_source_data_2") or ""
+
+                rows.append({
+                    "fecha":       (p.get("createdate") or "")[:10],
+                    "pais":        normalizar_pais(pais_raw),
+                    "categoria":   cat or "Sin categoría",
+                    "plataforma_hs": parse_plataforma_hs(latest_src, latest_d1),
+                    "campaña_hs":  latest_d2 or latest_d1 or "Sin campaña",
+                    "programa":    parse_programa_hs(
+                                       p.get("curso") or "",
+                                       p.get("modalidad_curso") or "",
+                                       form_raw,
+                                   ),
+                    "formulario":  p.get("first_conversion_event_name") or "",
+                })
+
+            pg = data.get("paging", {})
+            if not pg or "next" not in pg:
+                break
+            after = pg["next"]["after"]
+
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+        return df
+
+    except Exception as e:
+        st.error(f"Error HubSpot CRM: {e}")
+        return pd.DataFrame()
+
 # ─── Sidebar — filtros ────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Filtros")
@@ -630,10 +802,9 @@ with st.sidebar:
         st.link_button("🔄 Renovar acceso TikTok", TIKTOK_AUTH_URL,
                        use_container_width=True)
 
-# ─── Carga de datos ───────────────────────────────────────────────────────────
-st.title("📊 Hofmann · Inversión Publicitaria")
+# ─── Carga de datos (Ads) ─────────────────────────────────────────────────────
+st.title("📊 Hofmann · Ads & CRM Dashboard")
 
-# Caption dinámico con plataformas activas
 active_source_labels = []
 with st.spinner("Cargando datos..."):
     df_google = get_google_ads_data(str(start_d), str(end_d))
@@ -659,264 +830,501 @@ if not df_linkedin.empty:
 if not df_tiktok.empty:
     active_source_labels.append("TikTok Ads")
 
-st.caption(" + ".join(active_source_labels) + " · Caché actualizado cada hora")
+st.caption((" + ".join(active_source_labels) if active_source_labels else "Sin datos de Ads") +
+           " · Caché actualizado cada hora")
 
 df_all = pd.concat([df_google, df_meta, df_linkedin, df_tiktok], ignore_index=True)
 
-if df_all.empty:
-    st.warning("No hay datos para el período seleccionado. Comprueba las credenciales.")
-    st.stop()
+# Aplicar filtros de sidebar
+if not df_all.empty:
+    mask = pd.Series(True, index=df_all.index)
+    if mercado_filtro:
+        mask &= df_all["mercado"].isin(mercado_filtro)
+    if plataforma_filtro:
+        mask &= df_all["plataforma"].isin(plataforma_filtro)
+    df = df_all[mask].copy()
+else:
+    df = pd.DataFrame()
 
-# Aplicar filtros
-mask = pd.Series(True, index=df_all.index)
-if mercado_filtro:
-    mask &= df_all["mercado"].isin(mercado_filtro)
-if plataforma_filtro:
-    mask &= df_all["plataforma"].isin(plataforma_filtro)
-df = df_all[mask].copy()
+# ─── Tabs principales ─────────────────────────────────────────────────────────
+tab1, tab2 = st.tabs(["📊 Inversión Publicitaria", "👥 Leads por Campaña"])
 
-if df.empty:
-    st.info("No hay datos con los filtros aplicados.")
-    st.stop()
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — Inversión Publicitaria
+# ══════════════════════════════════════════════════════════════════════════════
+with tab1:
+    if df_all.empty:
+        st.warning("No hay datos para el período seleccionado. Comprueba las credenciales.")
+        st.stop()
 
-# ─── KPIs ─────────────────────────────────────────────────────────────────────
-total_g   = df["gasto"].sum()
-total_c   = df["conversiones"].sum()
-total_cpl = total_g / total_c if total_c > 0 else 0
+    if df.empty:
+        st.info("No hay datos con los filtros aplicados.")
+        st.stop()
 
-k1, k2, k3 = st.columns(3)
-with k1:
-    st.metric("💰 Inversión Total", f"€ {total_g:,.0f}")
-with k2:
-    st.metric("🎯 Conversiones", f"{total_c:,.0f}")
-with k3:
-    st.metric("📈 CPL Total", f"€ {total_cpl:,.2f}")
+    # ─── KPIs ─────────────────────────────────────────────────────────────────
+    total_g   = df["gasto"].sum()
+    total_c   = df["conversiones"].sum()
+    total_cpl = total_g / total_c if total_c > 0 else 0
 
-# Sub-KPIs dinámicos por plataforma
-platforms_in_df = [p for p in AVAILABLE_PLATFORMS if p in df["plataforma"].values]
-if platforms_in_df:
-    pcols = st.columns(len(platforms_in_df))
-    for i, plat in enumerate(platforms_in_df):
-        icon = PLATFORM_ICONS.get(plat, "⚫")
-        sub  = df[df["plataforma"] == plat]
-        g    = sub["gasto"].sum()
-        c    = sub["conversiones"].sum()
-        cpl  = g / c if c > 0 else 0
-        with pcols[i]:
-            with st.container(border=True):
-                st.markdown(f"**{icon} {plat}**")
-                cc1, cc2, cc3 = st.columns(3)
-                cc1.metric("Inversión",    f"€ {g:,.0f}")
-                cc2.metric("Conversiones", f"{c:,.0f}")
-                cc3.metric("CPL",          f"€ {cpl:,.2f}")
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        st.metric("💰 Inversión Total", f"€ {total_g:,.0f}")
+    with k2:
+        st.metric("🎯 Conversiones", f"{total_c:,.0f}")
+    with k3:
+        st.metric("📈 CPL Total", f"€ {total_cpl:,.2f}")
 
-st.divider()
+    # Sub-KPIs dinámicos por plataforma
+    platforms_in_df = [p for p in AVAILABLE_PLATFORMS if p in df["plataforma"].values]
+    if platforms_in_df:
+        pcols = st.columns(len(platforms_in_df))
+        for i, plat in enumerate(platforms_in_df):
+            icon = PLATFORM_ICONS.get(plat, "⚫")
+            sub  = df[df["plataforma"] == plat]
+            g    = sub["gasto"].sum()
+            c    = sub["conversiones"].sum()
+            cpl  = g / c if c > 0 else 0
+            with pcols[i]:
+                with st.container(border=True):
+                    st.markdown(f"**{icon} {plat}**")
+                    cc1, cc2, cc3 = st.columns(3)
+                    cc1.metric("Inversión",    f"€ {g:,.0f}")
+                    cc2.metric("Conversiones", f"{c:,.0f}")
+                    cc3.metric("CPL",          f"€ {cpl:,.2f}")
 
-# ─── Preparar datos diarios ───────────────────────────────────────────────────
-df_day_total = (
-    df.groupby("fecha")
-    .agg(gasto=("gasto", "sum"), conversiones=("conversiones", "sum"))
-    .reset_index()
-    .sort_values("fecha")
-)
-df_day_total["fecha_str"] = df_day_total["fecha"].dt.strftime("%d/%m")
-df_day_total["CPL"] = calc_cpl(df_day_total["gasto"], df_day_total["conversiones"])
+    st.divider()
 
-df_day_plat = (
-    df.groupby(["fecha", "plataforma"])
-    .agg(gasto=("gasto", "sum"), conversiones=("conversiones", "sum"))
-    .reset_index()
-    .sort_values("fecha")
-)
-df_day_plat["fecha_str"] = df_day_plat["fecha"].dt.strftime("%d/%m")
-df_day_plat["CPL"] = calc_cpl(df_day_plat["gasto"], df_day_plat["conversiones"])
+    # ─── Preparar datos diarios ───────────────────────────────────────────────
+    df_day_total = (
+        df.groupby("fecha")
+        .agg(gasto=("gasto", "sum"), conversiones=("conversiones", "sum"))
+        .reset_index()
+        .sort_values("fecha")
+    )
+    df_day_total["fecha_str"] = df_day_total["fecha"].dt.strftime("%d/%m")
+    df_day_total["CPL"] = calc_cpl(df_day_total["gasto"], df_day_total["conversiones"])
 
-GRID = "rgba(0,0,0,0.08)"
-YAXIS_DEFAULT  = dict(gridcolor=GRID)
-YAXIS_EURO     = dict(gridcolor=GRID, tickprefix="€", tickformat=",.0f")
-YAXIS_EURO_CPL = dict(gridcolor=GRID, tickprefix="€", tickformat=",.2f")
+    df_day_plat = (
+        df.groupby(["fecha", "plataforma"])
+        .agg(gasto=("gasto", "sum"), conversiones=("conversiones", "sum"))
+        .reset_index()
+        .sort_values("fecha")
+    )
+    df_day_plat["fecha_str"] = df_day_plat["fecha"].dt.strftime("%d/%m")
+    df_day_plat["CPL"] = calc_cpl(df_day_plat["gasto"], df_day_plat["conversiones"])
 
-def base_layout(height=340, yaxis=None):
-    layout = dict(
-        height=height,
+    GRID = "rgba(0,0,0,0.08)"
+    YAXIS_DEFAULT  = dict(gridcolor=GRID)
+    YAXIS_EURO     = dict(gridcolor=GRID, tickprefix="€", tickformat=",.0f")
+    YAXIS_EURO_CPL = dict(gridcolor=GRID, tickprefix="€", tickformat=",.2f")
+
+    def base_layout(height=340, yaxis=None):
+        layout = dict(
+            height=height,
+            margin=dict(l=0, r=0, t=30, b=40),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
+        layout["yaxis"] = yaxis if yaxis is not None else YAXIS_DEFAULT
+        return layout
+
+    # ─── Sección 1: Inversión ─────────────────────────────────────────────────
+    st.subheader("💰 Inversión Diaria")
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.caption("Total (todas las plataformas)")
+        fig1 = px.bar(
+            df_day_total, x="fecha_str", y="gasto",
+            labels={"fecha_str": "", "gasto": "Inversión"},
+            color_discrete_sequence=["#6C63FF"],
+            text=df_day_total["gasto"].apply(lambda v: f"€{v:,.0f}"),
+        )
+        fig1.update_layout(**base_layout(yaxis=YAXIS_EURO))
+        fig1.update_traces(textposition="outside", textfont_size=9, marker_color="#6C63FF")
+        st.plotly_chart(fig1, use_container_width=True)
+
+    with col_b:
+        st.caption("Por plataforma")
+        fig2 = px.bar(
+            df_day_plat, x="fecha_str", y="gasto",
+            color="plataforma", color_discrete_map=COLORS, barmode="stack",
+            labels={"fecha_str": "", "gasto": "Inversión", "plataforma": ""},
+        )
+        fig2.update_layout(**base_layout(yaxis=YAXIS_EURO))
+        fig2.update_traces(textposition="inside", textfont_size=9,
+                           texttemplate="€%{y:,.0f}")
+        st.plotly_chart(fig2, use_container_width=True)
+
+    st.divider()
+
+    # ─── Sección 2: Conversiones ──────────────────────────────────────────────
+    st.subheader("🎯 Conversiones Diarias")
+    col_c, col_d = st.columns(2)
+
+    with col_c:
+        st.caption("Total (todas las plataformas)")
+        fig3 = px.bar(
+            df_day_total, x="fecha_str", y="conversiones",
+            labels={"fecha_str": "", "conversiones": "Conversiones"},
+            text_auto=".0f",
+            color_discrete_sequence=["#6C63FF"],
+        )
+        fig3.update_layout(**base_layout())
+        fig3.update_traces(textposition="outside", textfont_size=9, marker_color="#6C63FF")
+        st.plotly_chart(fig3, use_container_width=True)
+
+    with col_d:
+        st.caption("Por plataforma")
+        fig4 = px.bar(
+            df_day_plat, x="fecha_str", y="conversiones",
+            color="plataforma", color_discrete_map=COLORS, barmode="stack",
+            labels={"fecha_str": "", "conversiones": "Conversiones", "plataforma": ""},
+            text_auto=".0f",
+        )
+        fig4.update_layout(**base_layout())
+        fig4.update_traces(textposition="inside", textfont_size=9)
+        st.plotly_chart(fig4, use_container_width=True)
+
+    st.divider()
+
+    # ─── Sección 3: CPL diario ────────────────────────────────────────────────
+    st.subheader("📈 CPL Bruto Diario")
+    col_e, col_f = st.columns(2)
+
+    with col_e:
+        st.caption("Total (todas las plataformas)")
+        df_cpl_t = df_day_total
+        fig5 = go.Figure()
+        fig5.add_trace(go.Scatter(
+            x=df_cpl_t["fecha_str"], y=df_cpl_t["CPL"],
+            mode="lines+markers+text",
+            line=dict(color="#6C63FF", width=2),
+            marker=dict(size=7),
+            text=df_cpl_t["CPL"].apply(lambda v: f"€{v:,.2f}"),
+            textposition="top center",
+            textfont=dict(size=10),
+            name="CPL Total",
+        ))
+        fig5.update_layout(**base_layout(yaxis=YAXIS_EURO_CPL), showlegend=False)
+        st.plotly_chart(fig5, use_container_width=True)
+
+    with col_f:
+        st.caption("Por plataforma")
+        df_cpl_p = df_day_plat
+        fig6 = go.Figure()
+        for plat in df_cpl_p["plataforma"].unique():
+            color = COLORS.get(plat, "#888888")
+            sub   = df_cpl_p[df_cpl_p["plataforma"] == plat]
+            if sub.empty:
+                continue
+            fig6.add_trace(go.Scatter(
+                x=sub["fecha_str"], y=sub["CPL"],
+                mode="lines+markers+text",
+                line=dict(color=color, width=2),
+                marker=dict(size=6),
+                text=sub["CPL"].apply(lambda v: f"€{v:,.2f}"),
+                textposition="top center",
+                textfont=dict(size=9),
+                name=plat,
+            ))
+        fig6.update_layout(**base_layout(yaxis=YAXIS_EURO_CPL))
+        st.plotly_chart(fig6, use_container_width=True)
+
+    st.divider()
+
+    # ─── Tabla de campañas ────────────────────────────────────────────────────
+    st.subheader("📋 Rendimiento por Campaña")
+
+    df_camp = (
+        df.groupby(["plataforma", "mercado", "campaña"])
+        .agg(
+            gasto=("gasto", "sum"),
+            conversiones=("conversiones", "sum"),
+            clics=("clics", "sum"),
+            impresiones=("impresiones", "sum"),
+        )
+        .reset_index()
+    )
+    df_camp["CPL (€)"] = calc_cpl(df_camp["gasto"], df_camp["conversiones"]).round(2)
+    df_camp["CPC (€)"] = (
+        df_camp["gasto"] / df_camp["clics"].replace(0, float("nan"))
+    ).round(2)
+    df_camp = df_camp.sort_values("gasto", ascending=False)
+    df_camp["gasto"]        = df_camp["gasto"].round(2)
+    df_camp["conversiones"] = df_camp["conversiones"].round(1)
+
+    st.dataframe(
+        df_camp.rename(columns={
+            "plataforma":   "Plataforma",
+            "mercado":      "Mercado",
+            "campaña":      "Campaña",
+            "gasto":        "Inversión (€)",
+            "conversiones": "Conversiones",
+            "clics":        "Clics",
+        })[["Plataforma", "Mercado", "Campaña", "Inversión (€)", "Conversiones", "Clics", "CPL (€)"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Inversión (€)": st.column_config.NumberColumn(format="€ %.2f"),
+            "CPL (€)":       st.column_config.NumberColumn(format="€ %.2f"),
+        },
+    )
+
+    st.divider()
+
+    # ─── Gráfico: CPL por campaña ─────────────────────────────────────────────
+    st.subheader("📈 CPL por Campaña")
+
+    df_cpl = df_camp.copy()
+    df_cpl["CPL"] = calc_cpl(df_cpl["gasto"], df_cpl["conversiones"])
+    df_cpl = df_cpl.sort_values("CPL", ascending=True).head(25)
+
+    fig_cpl = px.bar(
+        df_cpl,
+        x="CPL",
+        y="campaña",
+        color="plataforma",
+        color_discrete_map=COLORS,
+        orientation="h",
+        labels={"CPL": "CPL (€)", "campaña": "", "plataforma": ""},
+        text=df_cpl["CPL"].apply(lambda x: f"€{x:.2f}"),
+    )
+    fig_cpl.update_layout(
+        height=max(320, len(df_cpl) * 30),
+        margin=dict(l=0, r=60, t=20, b=0),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(tickfont=dict(size=11), gridcolor="rgba(0,0,0,0)"),
+        xaxis=dict(gridcolor="rgba(0,0,0,0.08)", title="CPL (€)", tickprefix="€", tickformat=",.2f"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    fig_cpl.update_traces(textposition="outside", textfont_size=11)
+    st.plotly_chart(fig_cpl, use_container_width=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — Leads por Campaña (HubSpot CRM)
+# ══════════════════════════════════════════════════════════════════════════════
+with tab2:
+    st.subheader("👥 Leads por Plataforma, País y Programa")
+
+    if not HUBSPOT_TOKEN:
+        st.warning("No hay token de HubSpot configurado. Añade **HUBSPOT_TOKEN** en los secrets.")
+        st.stop()
+
+    # ─── Filtros inline ───────────────────────────────────────────────────────
+    fc1, fc2, fc3, fc4 = st.columns([1, 1, 1, 1])
+    with fc1:
+        excluir_eventos = st.checkbox("Excluir Webinar / Open Day", value=True)
+
+    with st.spinner("Cargando leads de HubSpot..."):
+        df_hs = get_hubspot_leads(str(start_d), str(end_d), HUBSPOT_TOKEN, excluir_eventos)
+
+    if df_hs.empty:
+        st.info("No hay leads en el período y filtros seleccionados.")
+        st.stop()
+
+    plat_opts = sorted(df_hs["plataforma_hs"].unique().tolist())
+    pais_opts = sorted(df_hs["pais"].unique().tolist())
+    prog_opts = sorted(df_hs["programa"].unique().tolist())
+
+    with fc2:
+        filtro_plat_hs = st.multiselect("Plataforma", plat_opts, default=plat_opts)
+    with fc3:
+        filtro_pais_hs = st.multiselect("País", pais_opts, default=pais_opts)
+    with fc4:
+        filtro_prog_hs = st.multiselect("Programa", prog_opts, default=prog_opts)
+
+    # Aplicar filtros
+    df_hsf = df_hs.copy()
+    if filtro_plat_hs:
+        df_hsf = df_hsf[df_hsf["plataforma_hs"].isin(filtro_plat_hs)]
+    if filtro_pais_hs:
+        df_hsf = df_hsf[df_hsf["pais"].isin(filtro_pais_hs)]
+    if filtro_prog_hs:
+        df_hsf = df_hsf[df_hsf["programa"].isin(filtro_prog_hs)]
+
+    if df_hsf.empty:
+        st.info("No hay leads con los filtros aplicados.")
+        st.stop()
+
+    # ─── KPIs ─────────────────────────────────────────────────────────────────
+    _PLATS_PAGO = {"Google Ads", "Meta Ads", "LinkedIn Ads", "TikTok Ads", "Social Pagado"}
+    total_leads   = len(df_hsf)
+    leads_pagados = len(df_hsf[df_hsf["plataforma_hs"].isin(_PLATS_PAGO)])
+    paises_n      = df_hsf["pais"].nunique()
+    pct_pagados   = leads_pagados / total_leads * 100 if total_leads > 0 else 0
+
+    kh1, kh2, kh3, kh4 = st.columns(4)
+    kh1.metric("👥 Total Leads",    f"{total_leads:,}")
+    kh2.metric("💰 Leads Pagados",  f"{leads_pagados:,}")
+    kh3.metric("📍 Países",         f"{paises_n}")
+    kh4.metric("📊 % Pagados",      f"{pct_pagados:.0f}%")
+
+    # Sub-KPIs por plataforma de pago
+    plats_pago_presentes = [p for p in ["Google Ads", "Meta Ads", "LinkedIn Ads", "TikTok Ads"]
+                            if p in df_hsf["plataforma_hs"].values]
+    if plats_pago_presentes:
+        pcols_hs = st.columns(len(plats_pago_presentes))
+        for i, plat in enumerate(plats_pago_presentes):
+            icon = PLATFORM_ICONS.get(plat, "⚫")
+            n    = len(df_hsf[df_hsf["plataforma_hs"] == plat])
+            with pcols_hs[i]:
+                with st.container(border=True):
+                    st.markdown(f"**{icon} {plat}**")
+                    st.metric("Leads", f"{n:,}")
+
+    st.divider()
+
+    # ─── Leads diarios por plataforma ─────────────────────────────────────────
+    st.subheader("📅 Leads Diarios por Plataforma")
+
+    COLORS_HS = {
+        **COLORS,
+        "SEO Orgánico":    "#34A853",
+        "Email":           "#EA4335",
+        "Directo":         "#FBBC04",
+        "Social Orgánico": "#9C27B0",
+        "Social Pagado":   "#607D8B",
+        "Referido":        "#00BCD4",
+        "Offline":         "#795548",
+        "Desconocido":     "#9E9E9E",
+    }
+
+    df_hs_day = (
+        df_hsf.groupby(["fecha", "plataforma_hs"])
+        .size().reset_index(name="leads")
+        .sort_values("fecha")
+    )
+    df_hs_day["fecha_str"] = pd.to_datetime(df_hs_day["fecha"]).dt.strftime("%d/%m")
+
+    fig_day_hs = px.bar(
+        df_hs_day, x="fecha_str", y="leads",
+        color="plataforma_hs", color_discrete_map=COLORS_HS, barmode="stack",
+        labels={"fecha_str": "", "leads": "Leads", "plataforma_hs": ""},
+        text_auto=".0f",
+    )
+    fig_day_hs.update_layout(
+        height=340,
         margin=dict(l=0, r=0, t=30, b=40),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        yaxis=dict(gridcolor="rgba(0,0,0,0.08)"),
     )
-    layout["yaxis"] = yaxis if yaxis is not None else YAXIS_DEFAULT
-    return layout
+    fig_day_hs.update_traces(textposition="inside", textfont_size=9)
+    st.plotly_chart(fig_day_hs, use_container_width=True)
 
-# ─── Sección 1: Inversión ─────────────────────────────────────────────────────
-st.subheader("💰 Inversión Diaria")
-col_a, col_b = st.columns(2)
+    st.divider()
 
-with col_a:
-    st.caption("Total (todas las plataformas)")
-    fig1 = px.bar(
-        df_day_total, x="fecha_str", y="gasto",
-        labels={"fecha_str": "", "gasto": "Inversión"},
-        color_discrete_sequence=["#6C63FF"],
-        text=df_day_total["gasto"].apply(lambda v: f"€{v:,.0f}"),
+    # ─── País y Programa ──────────────────────────────────────────────────────
+    col_p1, col_p2 = st.columns(2)
+
+    with col_p1:
+        st.subheader("🌍 Leads por País")
+        df_pais = (
+            df_hsf.groupby("pais").size()
+            .reset_index(name="leads")
+            .sort_values("leads", ascending=True)
+            .tail(15)
+        )
+        fig_pais = px.bar(
+            df_pais, x="leads", y="pais", orientation="h",
+            labels={"leads": "Leads", "pais": ""},
+            text_auto=".0f",
+            color_discrete_sequence=["#6C63FF"],
+        )
+        fig_pais.update_layout(
+            height=max(280, len(df_pais) * 30),
+            margin=dict(l=0, r=40, t=20, b=0),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(tickfont=dict(size=11), gridcolor="rgba(0,0,0,0)"),
+            xaxis=dict(gridcolor="rgba(0,0,0,0.08)"),
+            showlegend=False,
+        )
+        fig_pais.update_traces(textposition="outside", textfont_size=10)
+        st.plotly_chart(fig_pais, use_container_width=True)
+
+    with col_p2:
+        st.subheader("🎓 Leads por Programa")
+        df_prog = (
+            df_hsf.groupby("programa").size()
+            .reset_index(name="leads")
+            .sort_values("leads", ascending=True)
+        )
+        fig_prog = px.bar(
+            df_prog, x="leads", y="programa", orientation="h",
+            labels={"leads": "Leads", "programa": ""},
+            text_auto=".0f",
+            color_discrete_sequence=["#1877F2"],
+        )
+        fig_prog.update_layout(
+            height=max(280, len(df_prog) * 30),
+            margin=dict(l=0, r=40, t=20, b=0),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(tickfont=dict(size=11), gridcolor="rgba(0,0,0,0)"),
+            xaxis=dict(gridcolor="rgba(0,0,0,0.08)"),
+            showlegend=False,
+        )
+        fig_prog.update_traces(textposition="outside", textfont_size=10)
+        st.plotly_chart(fig_prog, use_container_width=True)
+
+    st.divider()
+
+    # ─── Tabla principal: Plataforma × Campaña × País × Programa ─────────────
+    st.subheader("📋 Detalle por Campaña, País y Programa")
+
+    df_camp_hs = (
+        df_hsf.groupby(["plataforma_hs", "campaña_hs", "pais", "programa"])
+        .size().reset_index(name="Leads")
+        .sort_values("Leads", ascending=False)
+        .rename(columns={
+            "plataforma_hs": "Plataforma",
+            "campaña_hs":    "Campaña",
+            "pais":          "País",
+            "programa":      "Programa",
+        })
     )
-    fig1.update_layout(**base_layout(yaxis=YAXIS_EURO))
-    fig1.update_traces(textposition="outside", textfont_size=9, marker_color="#6C63FF")
-    st.plotly_chart(fig1, use_container_width=True)
-
-with col_b:
-    st.caption("Por plataforma")
-    fig2 = px.bar(
-        df_day_plat, x="fecha_str", y="gasto",
-        color="plataforma", color_discrete_map=COLORS, barmode="stack",
-        labels={"fecha_str": "", "gasto": "Inversión", "plataforma": ""},
+    st.dataframe(
+        df_camp_hs,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Plataforma": st.column_config.TextColumn(width="small"),
+            "Leads":      st.column_config.NumberColumn(format="%d"),
+        },
     )
-    fig2.update_layout(**base_layout(yaxis=YAXIS_EURO))
-    fig2.update_traces(textposition="inside", textfont_size=9,
-                       texttemplate="€%{y:,.0f}")
-    st.plotly_chart(fig2, use_container_width=True)
 
-st.divider()
+    st.divider()
 
-# ─── Sección 2: Conversiones ──────────────────────────────────────────────────
-st.subheader("🎯 Conversiones Diarias")
-col_c, col_d = st.columns(2)
+    # ─── Heatmap: País × Plataforma ───────────────────────────────────────────
+    st.subheader("🗺️ Leads: País × Plataforma")
 
-with col_c:
-    st.caption("Total (todas las plataformas)")
-    fig3 = px.bar(
-        df_day_total, x="fecha_str", y="conversiones",
-        labels={"fecha_str": "", "conversiones": "Conversiones"},
-        text_auto=".0f",
-        color_discrete_sequence=["#6C63FF"],
+    df_heat = (
+        df_hsf.groupby(["pais", "plataforma_hs"])
+        .size().reset_index(name="leads")
     )
-    fig3.update_layout(**base_layout())
-    fig3.update_traces(textposition="outside", textfont_size=9, marker_color="#6C63FF")
-    st.plotly_chart(fig3, use_container_width=True)
+    top_paises = df_hsf["pais"].value_counts().head(12).index.tolist()
+    df_heat = df_heat[df_heat["pais"].isin(top_paises)]
 
-with col_d:
-    st.caption("Por plataforma")
-    fig4 = px.bar(
-        df_day_plat, x="fecha_str", y="conversiones",
-        color="plataforma", color_discrete_map=COLORS, barmode="stack",
-        labels={"fecha_str": "", "conversiones": "Conversiones", "plataforma": ""},
-        text_auto=".0f",
+    pivot = df_heat.pivot_table(index="pais", columns="plataforma_hs",
+                                values="leads", aggfunc="sum", fill_value=0)
+    fig_heat = px.imshow(
+        pivot,
+        text_auto=True,
+        aspect="auto",
+        color_continuous_scale="Blues",
+        labels={"x": "Plataforma", "y": "País", "color": "Leads"},
     )
-    fig4.update_layout(**base_layout())
-    fig4.update_traces(textposition="inside", textfont_size=9)
-    st.plotly_chart(fig4, use_container_width=True)
-
-st.divider()
-
-# ─── Sección 3: CPL diario ────────────────────────────────────────────────────
-st.subheader("📈 CPL Bruto Diario")
-col_e, col_f = st.columns(2)
-
-with col_e:
-    st.caption("Total (todas las plataformas)")
-    df_cpl_t = df_day_total
-    fig5 = go.Figure()
-    fig5.add_trace(go.Scatter(
-        x=df_cpl_t["fecha_str"], y=df_cpl_t["CPL"],
-        mode="lines+markers+text",
-        line=dict(color="#6C63FF", width=2),
-        marker=dict(size=7),
-        text=df_cpl_t["CPL"].apply(lambda v: f"€{v:,.2f}"),
-        textposition="top center",
-        textfont=dict(size=10),
-        name="CPL Total",
-    ))
-    fig5.update_layout(**base_layout(yaxis=YAXIS_EURO_CPL), showlegend=False)
-    st.plotly_chart(fig5, use_container_width=True)
-
-with col_f:
-    st.caption("Por plataforma")
-    df_cpl_p = df_day_plat
-    fig6 = go.Figure()
-    for plat in df_cpl_p["plataforma"].unique():
-        color = COLORS.get(plat, "#888888")
-        sub   = df_cpl_p[df_cpl_p["plataforma"] == plat]
-        if sub.empty:
-            continue
-        fig6.add_trace(go.Scatter(
-            x=sub["fecha_str"], y=sub["CPL"],
-            mode="lines+markers+text",
-            line=dict(color=color, width=2),
-            marker=dict(size=6),
-            text=sub["CPL"].apply(lambda v: f"€{v:,.2f}"),
-            textposition="top center",
-            textfont=dict(size=9),
-            name=plat,
-        ))
-    fig6.update_layout(**base_layout(yaxis=YAXIS_EURO_CPL))
-    st.plotly_chart(fig6, use_container_width=True)
-
-st.divider()
-
-# ─── Tabla de campañas ────────────────────────────────────────────────────────
-st.subheader("📋 Rendimiento por Campaña")
-
-df_camp = (
-    df.groupby(["plataforma", "mercado", "campaña"])
-    .agg(
-        gasto=("gasto", "sum"),
-        conversiones=("conversiones", "sum"),
-        clics=("clics", "sum"),
-        impresiones=("impresiones", "sum"),
+    fig_heat.update_layout(
+        height=max(300, len(pivot) * 40),
+        margin=dict(l=0, r=0, t=30, b=0),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        coloraxis_showscale=False,
     )
-    .reset_index()
-)
-df_camp["CPL (€)"] = calc_cpl(df_camp["gasto"], df_camp["conversiones"]).round(2)
-df_camp["CPC (€)"] = (
-    df_camp["gasto"] / df_camp["clics"].replace(0, float("nan"))
-).round(2)
-df_camp = df_camp.sort_values("gasto", ascending=False)
-df_camp["gasto"]        = df_camp["gasto"].round(2)
-df_camp["conversiones"] = df_camp["conversiones"].round(1)
-
-st.dataframe(
-    df_camp.rename(columns={
-        "plataforma":   "Plataforma",
-        "mercado":      "Mercado",
-        "campaña":      "Campaña",
-        "gasto":        "Inversión (€)",
-        "conversiones": "Conversiones",
-        "clics":        "Clics",
-    })[["Plataforma", "Mercado", "Campaña", "Inversión (€)", "Conversiones", "Clics", "CPL (€)"]],
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Inversión (€)": st.column_config.NumberColumn(format="€ %.2f"),
-        "CPL (€)":       st.column_config.NumberColumn(format="€ %.2f"),
-    },
-)
-
-st.divider()
-
-# ─── Gráfico: CPL por campaña ─────────────────────────────────────────────────
-st.subheader("📈 CPL por Campaña")
-
-df_cpl = df_camp.copy()
-df_cpl["CPL"] = calc_cpl(df_cpl["gasto"], df_cpl["conversiones"])
-df_cpl = df_cpl.sort_values("CPL", ascending=True).head(25)
-
-fig_cpl = px.bar(
-    df_cpl,
-    x="CPL",
-    y="campaña",
-    color="plataforma",
-    color_discrete_map=COLORS,
-    orientation="h",
-    labels={"CPL": "CPL (€)", "campaña": "", "plataforma": ""},
-    text=df_cpl["CPL"].apply(lambda x: f"€{x:.2f}"),
-)
-fig_cpl.update_layout(
-    height=max(320, len(df_cpl) * 30),
-    margin=dict(l=0, r=60, t=20, b=0),
-    plot_bgcolor="rgba(0,0,0,0)",
-    paper_bgcolor="rgba(0,0,0,0)",
-    yaxis=dict(tickfont=dict(size=11), gridcolor="rgba(0,0,0,0)"),
-    xaxis=dict(gridcolor="rgba(0,0,0,0.08)", title="CPL (€)", tickprefix="€", tickformat=",.2f"),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-)
-fig_cpl.update_traces(textposition="outside", textfont_size=11)
-st.plotly_chart(fig_cpl, use_container_width=True)
+    fig_heat.update_xaxes(tickangle=-30)
+    st.plotly_chart(fig_heat, use_container_width=True)

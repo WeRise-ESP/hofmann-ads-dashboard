@@ -100,26 +100,6 @@ def _check_password():
 if not _check_password():
     st.stop()
 
-# ─── TikTok OAuth callback (captura auth_code al volver del flujo OAuth) ──────
-_qp = st.query_params
-if "auth_code" in _qp and _qp.get("state") == "hofmann":
-    with st.spinner("Renovando token de TikTok..."):
-        _resp = requests.post(
-            "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
-            json={"app_id": TIKTOK_APP_ID, "secret": TIKTOK_APP_SECRET,
-                  "auth_code": _qp["auth_code"]},
-            timeout=15,
-        )
-        _d = _resp.json()
-        if _d.get("code") == 0:
-            st.session_state["tt_token"] = _d["data"]["access_token"]
-            st.session_state.pop("tt_expired", None)
-            st.query_params.clear()
-            st.rerun()
-        else:
-            st.error(f"Error renovando token TikTok: {_d.get('message')}")
-            st.query_params.clear()
-
 # ─── Credenciales ─────────────────────────────────────────────────────────────
 def _s(key, default=""):
     try:
@@ -160,6 +140,26 @@ LINKEDIN_SHEET_URL = _s("LINKEDIN_SHEET_URL")
 
 # HubSpot CRM
 HUBSPOT_TOKEN = _s("HUBSPOT_TOKEN")
+
+# ─── TikTok OAuth callback (captura auth_code al volver del flujo OAuth) ──────
+_qp = st.query_params
+if "auth_code" in _qp and _qp.get("state") == "hofmann":
+    with st.spinner("Renovando token de TikTok..."):
+        _resp = requests.post(
+            "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+            json={"app_id": TIKTOK_APP_ID, "secret": TIKTOK_APP_SECRET,
+                  "auth_code": _qp["auth_code"]},
+            timeout=15,
+        )
+        _d = _resp.json()
+        if _d.get("code") == 0:
+            st.session_state["tt_token"] = _d["data"]["access_token"]
+            st.session_state.pop("tt_expired", None)
+            st.query_params.clear()
+            st.rerun()
+        else:
+            st.error(f"Error renovando token TikTok: {_d.get('message')}")
+            st.query_params.clear()
 
 # ─── Configuración de plataformas ─────────────────────────────────────────────
 COLORS = {

@@ -195,18 +195,22 @@ def calc_cpl(gasto: pd.Series, conversiones: pd.Series) -> pd.Series:
     return gasto.where(conversiones == 0, gasto / conversiones.replace(0, 1))
 
 # ─── Clasificador de mercado (Ads) ────────────────────────────────────────────
-# Regla Hofmann: si el nombre contiene el token "NAC" → Nacional; el resto → Latam.
+# Regla Hofmann → Nacional si el nombre contiene alguno de estos tokens:
+#   NAC / NACIONAL   (NAC_, _NAC, - NAC…)
+#   CAT              (Catalunya)
+#   ES               (delimitado: "- ES", "_ES"…)
+# Cualquier otra cosa (LATAM, etc.) → Latam.
 # El look-behind (?<![A-Z]) evita falsos positivos como "INTERNACIONAL".
-_NAC_RE = re.compile(r"(?<![A-Z])NAC")
+_NACIONAL_RE = re.compile(r"(?<![A-Z])NAC|(?<![A-Z])CAT|(?<![A-Z])ES(?![A-Z])")
 
 def parse_mercado(name: str, platform: str = "") -> str:
-    """Nacional si el nombre trae el token NAC (NAC_, _NAC, - NAC…); si no → Latam.
+    """Nacional si el nombre trae un token nacional (NAC/CAT/ES); si no → Latam.
 
     Se puede pasar más de un nombre separado por espacios (p. ej. campaña + grupo
     de anuncios en TikTok) para clasificar por el grupo cuando la campaña no trae
     la nomenclatura.
     """
-    return "Nacional" if _NAC_RE.search((name or "").upper()) else "Latam"
+    return "Nacional" if _NACIONAL_RE.search((name or "").upper()) else "Latam"
 
 # ─── Clasificadores HubSpot ───────────────────────────────────────────────────
 _PAIS_MAP = {

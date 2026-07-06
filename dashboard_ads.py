@@ -203,14 +203,25 @@ def calc_cpl(gasto: pd.Series, conversiones: pd.Series) -> pd.Series:
 # El look-behind (?<![A-Z]) evita falsos positivos como "INTERNACIONAL".
 _NACIONAL_RE = re.compile(r"(?<![A-Z])NAC|(?<![A-Z])CAT|(?<![A-Z])ES(?![A-Z])")
 
+# Excepciones manuales: campañas cuyo nombre engaña al clasificador.
+# Clave = substring (mayúsculas) del nombre de campaña · Valor = mercado forzado.
+_MERCADO_OVERRIDES = {
+    # LinkedIn: en el sheet lleva prefijo NAC_ por error, pero es de Latam.
+    "ONLINE_CONVERS_DIRECCION": "Latam",
+}
+
 def parse_mercado(name: str, platform: str = "") -> str:
     """Nacional si el nombre trae un token nacional (NAC/CAT/ES); si no → Latam.
 
     Se puede pasar más de un nombre separado por espacios (p. ej. campaña + grupo
     de anuncios en TikTok) para clasificar por el grupo cuando la campaña no trae
-    la nomenclatura.
+    la nomenclatura. Las excepciones de _MERCADO_OVERRIDES tienen prioridad.
     """
-    return "Nacional" if _NACIONAL_RE.search((name or "").upper()) else "Latam"
+    n = (name or "").upper()
+    for key, merc in _MERCADO_OVERRIDES.items():
+        if key in n:
+            return merc
+    return "Nacional" if _NACIONAL_RE.search(n) else "Latam"
 
 # ─── Clasificadores HubSpot ───────────────────────────────────────────────────
 _PAIS_MAP = {

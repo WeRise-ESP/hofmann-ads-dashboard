@@ -894,6 +894,23 @@ with tab1:
     with k3:
         st.metric("📈 CPL Total", f"€ {total_cpl:,.2f}")
 
+    # ─── General por mercado (todas las plataformas) ──────────────────────────
+    mcols = st.columns(2)
+    for mc, (merc, emoji) in zip(mcols, [("Nacional", "🇪🇸"), ("Latam", "🌎")]):
+        subm = df[df["mercado"] == merc]
+        gm   = subm["gasto"].sum()
+        cm   = subm["conversiones"].sum()
+        cplm = gm / cm if cm > 0 else 0
+        with mc:
+            with st.container(border=True):
+                st.markdown(f"**{emoji} {merc}** · General")
+                mm1, mm2, mm3 = st.columns(3)
+                mm1.metric("Inversión",    f"€ {gm:,.0f}")
+                mm2.metric("Conversiones", f"{cm:,.0f}")
+                mm3.metric("CPL",          f"€ {cplm:,.2f}")
+
+    st.divider()
+
     # Sub-KPIs dinámicos por plataforma
     platforms_in_df = [p for p in AVAILABLE_PLATFORMS if p in df["plataforma"].values]
     if platforms_in_df:

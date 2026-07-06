@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import requests
 import json
 import os
+import re
 from io import StringIO
 from datetime import date, timedelta
 from dotenv import load_dotenv
@@ -194,20 +195,18 @@ def calc_cpl(gasto: pd.Series, conversiones: pd.Series) -> pd.Series:
     return gasto.where(conversiones == 0, gasto / conversiones.replace(0, 1))
 
 # ─── Clasificador de mercado (Ads) ────────────────────────────────────────────
-def parse_mercado(name: str, platform: str) -> str:
-    n = name.upper()
-    if platform == "meta":
-        if n.startswith("NAC_"):
-            return "Nacional"
-        if n.startswith("LAT_"):
-            return "Latam"
-        return "Otro"
-    # Google, LinkedIn, TikTok: buscar tokens en el nombre de campaña
-    if any(t in n for t in ["LATAM", "- LAT", "_LAT", "LAT_"]):
-        return "Latam"
-    if any(t in n for t in ["- ES", "- NAC", "- BCN", "- CAT", "_ES", "_NAC", "_BCN", "_CAT", "- NACI", "NAC_"]):
-        return "Nacional"
-    return "Otro"
+# Regla Hofmann: si el nombre contiene el token "NAC" → Nacional; el resto → Latam.
+# El look-behind (?<![A-Z]) evita falsos positivos como "INTERNACIONAL".
+_NAC_RE = re.compile(r"(?<![A-Z])NAC")
+
+def parse_mercado(name: str, platform: str = "") -> str:
+    """Nacional si el nombre trae el token NAC (NAC_, _NAC, - NAC…); si no → Latam.
+
+    Se puede pasar más de un nombre separado por espacios (p. ej. campaña + grupo
+    de anuncios en TikTok) para clasificar por el grupo cuando la campaña no trae
+    la nomenclatura.
+    """
+    return "Nacional" if _NAC_RE.search((name or "").upper()) else "Latam"
 
 # ─── Clasificadores HubSpot ───────────────────────────────────────────────────
 _PAIS_MAP = {
@@ -506,16 +505,19 @@ def get_tiktok_ads_data(start: str, end: str, token: str) -> pd.DataFrame:
     if not token or not TIKTOK_ADVERTISER_ID:
         return pd.DataFrame()
     try:
+        # Nivel grupo de anuncios: así podemos clasificar el mercado por el nombre
+        # del grupo cuando la campaña no trae la nomenclatura NAC/LAT.
         r = requests.get(
             "https://business-api.tiktok.com/open_api/v1.3/report/integrated/get/",
             headers={"Access-Token": token},
             params={
                 "advertiser_id": TIKTOK_ADVERTISER_ID,
                 "report_type":   "BASIC",
-                "data_level":    "AUCTION_CAMPAIGN",
-                "dimensions":    json.dumps(["campaign_id", "stat_time_day"]),
+                "data_level":    "AUCTION_ADGROUP",
+                "dimensions":    json.dumps(["adgroup_id", "stat_time_day"]),
                 "metrics":       json.dumps([
-                    "spend", "result", "clicks", "impressions", "campaign_name"
+                    "spend", "result", "clicks", "impressions",
+                    "campaign_name", "adgroup_name",
                 ]),
                 "start_date": start,
                 "end_date":   end,
@@ -540,21 +542,24 @@ def get_tiktok_ads_data(start: str, end: str, token: str) -> pd.DataFrame:
             gasto   = float(metrics.get("spend", 0) or 0)
             if gasto == 0:
                 continue
+            camp_name = metrics.get("campaign_name", f"TK_{dims.get('adgroup_id', '')}")
+            adg_name  = metrics.get("adgroup_name", "")
             rows.append({
                 "fecha":        dims.get("stat_time_day", start)[:10],
-                "campaña":      metrics.get("campaign_name", f"TK_{dims.get('campaign_id', '')}"),
+                "campaña":      camp_name,
                 "gasto":        gasto,
                 "conversiones": float(metrics.get("result", 0) or 0),
                 "clics":        int(metrics.get("clicks", 0) or 0),
                 "impresiones":  int(metrics.get("impressions", 0) or 0),
                 "plataforma":   "TikTok Ads",
+                # mercado por campaña; si la campaña no trae NAC, se mira el grupo
+                "mercado":      parse_mercado(f"{camp_name} {adg_name}"),
             })
 
         if not rows:
             return pd.DataFrame()
         df = pd.DataFrame(rows)
-        df["fecha"]   = pd.to_datetime(df["fecha"])
-        df["mercado"] = df["campaña"].apply(lambda x: parse_mercado(x, "tiktok"))
+        df["fecha"] = pd.to_datetime(df["fecha"])
         return df
 
     except Exception as e:
@@ -779,7 +784,7 @@ with st.sidebar:
 
     mercado_filtro = st.multiselect(
         "Mercado",
-        ["Nacional", "Latam", "Otro"],
+        ["Nacional", "Latam"],
         default=["Nacional", "Latam"],
     )
     plataforma_filtro = st.multiselect(
@@ -891,6 +896,15 @@ with tab1:
                     cc1.metric("Inversión",    f"€ {g:,.0f}")
                     cc2.metric("Conversiones", f"{c:,.0f}")
                     cc3.metric("CPL",          f"€ {cpl:,.2f}")
+                    # Desglose por mercado (Nacional / Latam)
+                    for merc, emoji in [("Nacional", "🇪🇸"), ("Latam", "🌎")]:
+                        sm = sub[sub["mercado"] == merc]
+                        gm = sm["gasto"].sum()
+                        cm = sm["conversiones"].sum()
+                        st.caption(
+                            f"{emoji} **{merc}** · € {gm:,.0f} · "
+                            f"{cm:,.0f} conv"
+                        )
 
     st.divider()
 

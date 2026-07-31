@@ -935,14 +935,14 @@ with tab1:
     ocols = st.columns(2)
     for oc, (moda, emoji) in zip(ocols, [("Online", "💻"), ("Presencial", "🏫")]):
         subo = df[df["modalidad"] == moda]
-        go   = subo["gasto"].sum()
+        gmod = subo["gasto"].sum()
         co   = subo["conversiones"].sum()
-        cplo = go / co if co > 0 else 0
+        cplo = gmod / co if co > 0 else 0
         with oc:
             with st.container(border=True):
                 st.markdown(f"**{emoji} {moda}** · General")
                 oo1, oo2, oo3 = st.columns(3)
-                oo1.metric("Inversión",    f"€ {go:,.0f}")
+                oo1.metric("Inversión",    f"€ {gmod:,.0f}")
                 oo2.metric("Conversiones", f"{co:,.0f}")
                 oo3.metric("CPL",          f"€ {cplo:,.2f}")
 

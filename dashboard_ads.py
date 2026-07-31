@@ -223,6 +223,11 @@ def parse_mercado(name: str, platform: str = "") -> str:
             return merc
     return "Nacional" if _NACIONAL_RE.search(n) else "Latam"
 
+# ─── Clasificador de modalidad (Online / Presencial) ─────────────────────────
+# Regla Hofmann: si el nombre contiene "ONLINE" → Online; si no → Presencial.
+def parse_modalidad(name: str) -> str:
+    return "Online" if "ONLINE" in (name or "").upper() else "Presencial"
+
 # ─── Clasificadores HubSpot ───────────────────────────────────────────────────
 _PAIS_MAP = {
     "ES": "España", "SPAIN": "España", "ESPAÑA": "España",
@@ -802,6 +807,11 @@ with st.sidebar:
         ["Nacional", "Latam"],
         default=["Nacional", "Latam"],
     )
+    modalidad_filtro = st.multiselect(
+        "Modalidad",
+        ["Online", "Presencial"],
+        default=["Online", "Presencial"],
+    )
     plataforma_filtro = st.multiselect(
         "Plataforma",
         AVAILABLE_PLATFORMS,
@@ -855,11 +865,17 @@ st.caption((" + ".join(active_source_labels) if active_source_labels else "Sin d
 
 df_all = pd.concat([df_google, df_meta, df_linkedin, df_tiktok], ignore_index=True)
 
+# Modalidad (Online / Presencial) inferida del nombre de campaña
+if not df_all.empty:
+    df_all["modalidad"] = df_all["campaña"].apply(parse_modalidad)
+
 # Aplicar filtros de sidebar
 if not df_all.empty:
     mask = pd.Series(True, index=df_all.index)
     if mercado_filtro:
         mask &= df_all["mercado"].isin(mercado_filtro)
+    if modalidad_filtro:
+        mask &= df_all["modalidad"].isin(modalidad_filtro)
     if plataforma_filtro:
         mask &= df_all["plataforma"].isin(plataforma_filtro)
     df = df_all[mask].copy()
@@ -908,6 +924,21 @@ with tab1:
                 mm1.metric("Inversión",    f"€ {gm:,.0f}")
                 mm2.metric("Conversiones", f"{cm:,.0f}")
                 mm3.metric("CPL",          f"€ {cplm:,.2f}")
+
+    # ─── General por modalidad (todas las plataformas) ────────────────────────
+    ocols = st.columns(2)
+    for oc, (moda, emoji) in zip(ocols, [("Online", "💻"), ("Presencial", "🏫")]):
+        subo = df[df["modalidad"] == moda]
+        go   = subo["gasto"].sum()
+        co   = subo["conversiones"].sum()
+        cplo = go / co if co > 0 else 0
+        with oc:
+            with st.container(border=True):
+                st.markdown(f"**{emoji} {moda}** · General")
+                oo1, oo2, oo3 = st.columns(3)
+                oo1.metric("Inversión",    f"€ {go:,.0f}")
+                oo2.metric("Conversiones", f"{co:,.0f}")
+                oo3.metric("CPL",          f"€ {cplo:,.2f}")
 
     st.divider()
 
@@ -1084,7 +1115,7 @@ with tab1:
     st.subheader("📋 Rendimiento por Campaña")
 
     df_camp = (
-        df.groupby(["plataforma", "mercado", "campaña"])
+        df.groupby(["plataforma", "mercado", "modalidad", "campaña"])
         .agg(
             gasto=("gasto", "sum"),
             conversiones=("conversiones", "sum"),
@@ -1105,11 +1136,12 @@ with tab1:
         df_camp.rename(columns={
             "plataforma":   "Plataforma",
             "mercado":      "Mercado",
+            "modalidad":    "Modalidad",
             "campaña":      "Campaña",
             "gasto":        "Inversión (€)",
             "conversiones": "Conversiones",
             "clics":        "Clics",
-        })[["Plataforma", "Mercado", "Campaña", "Inversión (€)", "Conversiones", "Clics", "CPL (€)"]],
+        })[["Plataforma", "Mercado", "Modalidad", "Campaña", "Inversión (€)", "Conversiones", "Clics", "CPL (€)"]],
         use_container_width=True,
         hide_index=True,
         column_config={

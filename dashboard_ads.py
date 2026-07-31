@@ -474,8 +474,8 @@ def get_linkedin_ads_data(start: str, end: str) -> pd.DataFrame:
             f"&accounts=List({acct})"
             f"&dateRange=(start:(year:{sy},month:{int(sm)},day:{int(sd)}),"
             f"end:(year:{ey},month:{int(em)},day:{int(ed)}))"
-            "&fields=costInLocalCurrency,externalWebsiteConversions,clicks,"
-            "impressions,pivotValues,dateRange&count=500"
+            "&fields=costInLocalCurrency,externalWebsiteConversions,oneClickLeads,"
+            "clicks,impressions,pivotValues,dateRange&count=500"
         )
         r = requests.get(analytics_url, headers=headers, timeout=30)
         r.raise_for_status()
@@ -498,7 +498,11 @@ def get_linkedin_ads_data(start: str, end: str) -> pd.DataFrame:
                 "fecha":        fecha,
                 "campaña":      camp_name,
                 "gasto":        gasto,
-                "conversiones": float(item.get("externalWebsiteConversions", 0) or 0),
+                # LinkedIn mide según el tipo de campaña: unas en "Conversiones"
+                # (externalWebsiteConversions) y otras en "Posibles contactos"
+                # (oneClickLeads, formularios de contacto). Sumamos ambas.
+                "conversiones": (float(item.get("externalWebsiteConversions", 0) or 0)
+                                 + float(item.get("oneClickLeads", 0) or 0)),
                 "clics":        int(item.get("clicks", 0) or 0),
                 "impresiones":  int(item.get("impressions", 0) or 0),
                 "plataforma":   "LinkedIn Ads",

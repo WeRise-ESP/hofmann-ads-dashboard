@@ -123,6 +123,7 @@ META_ACCOUNT_ID = _s("META_AD_ACCOUNT_ID", "2649358358505616")
 # LinkedIn Ads (opcional — se activa cuando haya credenciales)
 LINKEDIN_TOKEN      = _s("LINKEDIN_ACCESS_TOKEN")
 LINKEDIN_ACCOUNT_ID = _s("LINKEDIN_AD_ACCOUNT_ID")
+LINKEDIN_VERSION    = _s("LINKEDIN_API_VERSION", "202503")  # versión activa del API
 
 # TikTok Ads (opcional — se activa cuando haya credenciales)
 TIKTOK_TOKEN         = _s("TIKTOK_ACCESS_TOKEN")
@@ -201,7 +202,7 @@ def calc_cpl(gasto: pd.Series, conversiones: pd.Series) -> pd.Series:
 #   ES               (delimitado: "- ES", "_ES"…)
 # Cualquier otra cosa (LATAM, etc.) → Latam.
 # El look-behind (?<![A-Z]) evita falsos positivos como "INTERNACIONAL".
-_NACIONAL_RE = re.compile(r"(?<![A-Z])NAC|(?<![A-Z])CAT|(?<![A-Z])ES(?![A-Z])")
+_NACIONAL_RE = re.compile(r"(?<![A-Z])NAC|(?<![A-Z])CAT|(?<![A-Z])ESP?(?![A-Z])")
 
 # Excepciones manuales: campañas cuyo nombre engaña al clasificador.
 # Clave = substring (mayúsculas) del nombre de campaña · Valor = mercado forzado.
@@ -225,8 +226,18 @@ def parse_mercado(name: str, platform: str = "") -> str:
 
 # ─── Clasificador de modalidad (Online / Presencial) ─────────────────────────
 # Regla Hofmann: si el nombre contiene "ONLINE" → Online; si no → Presencial.
+# Excepciones: campañas cuyo nombre no lleva "online" pero sí lo son (p. ej.
+# LinkedIn "Direc_Rest_Convers_Latam" = la maestría online de dirección).
+_MODALIDAD_OVERRIDES = {
+    "DIREC_REST_CONVERS": "Online",
+}
+
 def parse_modalidad(name: str) -> str:
-    return "Online" if "ONLINE" in (name or "").upper() else "Presencial"
+    n = (name or "").upper()
+    for key, moda in _MODALIDAD_OVERRIDES.items():
+        if key in n:
+            return moda
+    return "Online" if "ONLINE" in n else "Presencial"
 
 # ─── Clasificadores HubSpot ───────────────────────────────────────────────────
 _PAIS_MAP = {
@@ -433,49 +444,40 @@ def get_linkedin_ads_data(start: str, end: str) -> pd.DataFrame:
     try:
         headers = {
             "Authorization": f"Bearer {LINKEDIN_TOKEN}",
-            "LinkedIn-Version": "202405",
+            "LinkedIn-Version": LINKEDIN_VERSION,
             "X-Restli-Protocol-Version": "2.0.0",
         }
 
-        # 1. Obtener nombres de campañas
-        camp_resp = requests.get(
-            "https://api.linkedin.com/rest/adCampaigns",
-            headers=headers,
-            params={
-                "q": "search",
-                "search.account.values[0]": f"urn:li:sponsoredAccount:{LINKEDIN_ACCOUNT_ID}",
-                "fields": "id,name",
-                "count": 200,
-            },
-            timeout=30,
+        # 1. Obtener nombres de campañas (endpoint bajo la cuenta, Rest.li 2.0)
+        camp_url = (
+            f"https://api.linkedin.com/rest/adAccounts/{LINKEDIN_ACCOUNT_ID}/adCampaigns"
+            "?q=search&search=(status:(values:List(ACTIVE,PAUSED,DRAFT,COMPLETED)))"
+            "&fields=id,name&count=200"
         )
+        camp_resp = requests.get(camp_url, headers=headers, timeout=30)
         campaign_names = {}
         if camp_resp.status_code == 200:
             for el in camp_resp.json().get("elements", []):
                 campaign_names[str(el["id"])] = el.get("name", f"LI_{el['id']}")
 
-        # 2. Obtener métricas diarias por campaña
+        # 2. Obtener métricas diarias por campaña.
+        # LinkedIn (Rest.li 2.0) exige comas y List(...) sin codificar, por eso
+        # construimos la URL a mano en vez de usar params (requests codifica las comas).
         sy, sm, sd = start.split("-")
         ey, em, ed = end.split("-")
-        r = requests.get(
-            "https://api.linkedin.com/rest/adAnalytics",
-            headers=headers,
-            params={
-                "q": "analytics",
-                "pivot": "CAMPAIGN",
-                "timeGranularity": "DAILY",
-                "accounts[0]": f"urn:li:sponsoredAccount:{LINKEDIN_ACCOUNT_ID}",
-                "dateRange.start.year":  sy,
-                "dateRange.start.month": str(int(sm)),
-                "dateRange.start.day":   str(int(sd)),
-                "dateRange.end.year":    ey,
-                "dateRange.end.month":   str(int(em)),
-                "dateRange.end.day":     str(int(ed)),
-                "fields": "costInLocalCurrency,externalWebsiteConversions,clicks,impressions,pivotValues,dateRange",
-                "count": 500,
-            },
-            timeout=30,
+        acct = requests.utils.quote(
+            f"urn:li:sponsoredAccount:{LINKEDIN_ACCOUNT_ID}", safe=""
         )
+        analytics_url = (
+            "https://api.linkedin.com/rest/adAnalytics?q=analytics&pivot=CAMPAIGN"
+            "&timeGranularity=DAILY"
+            f"&accounts=List({acct})"
+            f"&dateRange=(start:(year:{sy},month:{int(sm)},day:{int(sd)}),"
+            f"end:(year:{ey},month:{int(em)},day:{int(ed)}))"
+            "&fields=costInLocalCurrency,externalWebsiteConversions,clicks,"
+            "impressions,pivotValues,dateRange&count=500"
+        )
+        r = requests.get(analytics_url, headers=headers, timeout=30)
         r.raise_for_status()
         data = r.json()
 
